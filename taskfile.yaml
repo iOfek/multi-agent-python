@@ -34,3 +34,4 @@ tasks:
       - platforms: [windows]
         cmd: "powershell venv/Scripts/Activate.ps1"
       - "python3 main.py dev"
+ 

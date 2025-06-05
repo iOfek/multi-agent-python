@@ -1,0 +1,16 @@
+{
+  "name": "אופק",
+  "age": 29,
+  "is_student": false,
+  "student_details": null,
+  "is_employed": true,
+  "employment_duration": "לא סיפקה",
+  "monthly_income": 0.0,
+  "medical_condition": null,
+  "diagnosis_date": null,
+  "medications": [],
+  "treatment_duration": null,
+  "meets_income_threshold": null,
+  "has_continuous_employment": null,
+  "has_medical_documentation": null
+}

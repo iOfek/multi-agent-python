@@ -1,0 +1,16 @@
+{
+  "name": "הופק הסון",
+  "age": 29,
+  "is_student": false,
+  "student_details": null,
+  "is_employed": true,
+  "employment_duration": "שנה",
+  "monthly_income": 7544.0,
+  "medical_condition": null,
+  "diagnosis_date": null,
+  "medications": [],
+  "treatment_duration": null,
+  "meets_income_threshold": null,
+  "has_continuous_employment": null,
+  "has_medical_documentation": null
+}

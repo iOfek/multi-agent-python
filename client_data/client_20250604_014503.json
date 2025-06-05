@@ -1,0 +1,16 @@
+{
+  "name": "אופיר",
+  "age": 33,
+  "is_student": true,
+  "student_details": "סטודנט באוניברסיטה הפתוחה",
+  "is_employed": false,
+  "employment_duration": "לא עובד",
+  "monthly_income": 0.0,
+  "medical_condition": null,
+  "diagnosis_date": null,
+  "medications": [],
+  "treatment_duration": null,
+  "meets_income_threshold": null,
+  "has_continuous_employment": null,
+  "has_medical_documentation": null
+}

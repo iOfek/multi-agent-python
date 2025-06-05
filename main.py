@@ -21,7 +21,7 @@ from livekit.agents import (
 from livekit.agents.job import get_job_context
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import  openai, silero
 
 # uncomment to enable Krisp BVC noise cancellation, currently supported on Linux and MacOS
 # from livekit.plugins import noise_cancellation
@@ -36,6 +36,7 @@ logger = logging.getLogger("multi-agent")
 load_dotenv(dotenv_path=".env.local")
 
 common_instructions = (
+    "אתה מדבר רק עברית"
     "You are an editor at a leading publishing house, with a strong track record "
     "of discovering and nurturing new talent. You are a great communicator and ask "
     "the right questions to get the best out of people. You want the best for your "
@@ -276,9 +277,14 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession[StoryData](
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(model="nova-3"),
-        tts=openai.TTS(voice="ash"),
+        llm=openai.realtime.RealtimeModel.with_azure(
+            azure_deployment="gpt-4o-realtime-preview",
+            azure_endpoint=r"https://iofek-mbcpsptu-eastus2.cognitiveservices.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview",
+            api_key="4P3LarHA127RY4jDSABYaG5MA6QV4XrBpsJfK1LkjFOEsqcsTsz9JQQJ99BEACHYHv6XJ3w3AAAAACOGME7w",
+            api_version="2024-10-01-preview",
+        ),
+        # stt=deepgram.STT(model="nova-3"),
+        # tts=openai.TTS(voice="ash"),
         userdata=StoryData(),
     )
 

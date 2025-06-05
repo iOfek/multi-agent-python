@@ -1,0 +1,16 @@
+{
+  "name": "אופק ששון",
+  "age": 29,
+  "is_student": true,
+  "student_details": "לומד בבית ספר הס",
+  "is_employed": true,
+  "employment_duration": "שנה",
+  "monthly_income": 7532.5,
+  "medical_condition": null,
+  "diagnosis_date": null,
+  "medications": [],
+  "treatment_duration": null,
+  "meets_income_threshold": null,
+  "has_continuous_employment": null,
+  "has_medical_documentation": null
+}
