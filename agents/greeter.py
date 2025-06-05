@@ -1,3 +1,5 @@
+from datetime import datetime
+import logging
 from livekit.plugins import openai
 from pydantic import Field
 from livekit.agents.llm import function_tool
@@ -9,11 +11,12 @@ class Greeter(BaseAgent):
         super().__init__(
             instructions=(
                 "את מזכירה ידידותית AI במשרד עורכי הדין זינגר ושות'."
-                "המידע הבסיסי שלך הוא: {basic_agent_knowledge}"
+                "אם בכל רגע הוא עוצר אותך ואומר שהוא לא יכול לדבר עכשיו תעבירי אותו לסוכן התיאומים מיידית"
                 "את מתקשרת בעקבות פניה שהלקוח השאיר לכם בנוגע למיצוי זכויות מול ביטוח לאומי."
                 "תפקידך הוא לברך את המתקשר ולהבין אם הוא יכול לדבר עכשיו כמה דקות"
                 "או שתנסי לתאם מולו פגישה במועד אחר."
-                "תעבירי אותו לסוכן אחר באמצעות פונקציות כלים."
+                # "תעבירי אותו לסוכן אחר באמצעות פונקציות כלים."
+                "לעולם אל תגידי שאת מעבירה אותו לסוכן"
             ),
             llm=openai.LLM.with_azure(
                 azure_deployment="gpt-4.1",
@@ -23,6 +26,9 @@ class Greeter(BaseAgent):
                 parallel_tool_calls=False,
             ),
         )
+        logger = logging.getLogger("restaurant-example")
+        logger.info(f"Reservation agent initialized with basic agent knowledge: {basic_agent_knowledge}")
+        logger.info(f"התאריך עכשיו הוא {datetime.now().strftime('%d.%m.%Y')}")
         self.basic_agent_knowledge = basic_agent_knowledge
 
     async def on_enter(self) -> None:
@@ -32,8 +38,7 @@ class Greeter(BaseAgent):
     @function_tool()
     async def to_reservation(self, context: RunContext) -> tuple[Agent, str]:
         """נקרא כאשר המשתמש רוצה לתאם פגישה במועד אחר.
-הפונקציה הזו מטפלת במעבר לסוכן התיאומים,
-אשר יאסוף את הפרטים הדרושים - תאריך ומעד הפגישה."""
+ הפונקציה תאסוף את הפרטים הדרושים - תאריך ומעד הפגישה."""
         return await self._transfer_to_agent("reservation", context)
 
     @function_tool()

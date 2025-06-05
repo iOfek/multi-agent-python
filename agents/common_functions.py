@@ -59,19 +59,17 @@ async def end_call(context: RunContext) -> Agent:
     await hangup_call() 
 
 
-
 @function_tool()
-def convert_datetime_to_speech(date_str: str, time_str: str) -> str:
+async def convert_datetime_to_speech(
+    date_str: Annotated[str, Field(description="The date in format DD.MM.YYYY")],
+    time_str: Annotated[str, Field(description="The time in 24-hour format HH:MM")],
+    context: RunContext,
+) -> str:
     """
-    Convert a date and time into a natural spoken Hebrew format.
-    
-    Args:
-        date_str: Date in format "DD.MM.YYYY"
-        time_str: Time in format "HH:MM" (24-hour format)
-    
-    Returns:
-        A string in natural spoken Hebrew, e.g., "עשרים ושלושה באוגוסט בשעה חמש"
+    Converts a date and time into natural spoken Hebrew, like:
+    'עשרים ושלושה באוגוסט בשעה חמש'
     """
+
     # Hebrew mappings
     day_map = {
         1: "ראשון", 2: "שני", 3: "שלישי", 4: "רביעי", 5: "חמישי",
@@ -97,7 +95,7 @@ def convert_datetime_to_speech(date_str: str, time_str: str) -> str:
         23: "אחת עשרה"
     }
 
-    # Parse and convert
+    # Parse date and time
     dt = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
     day = day_map[dt.day]
     month = month_map[dt.month]

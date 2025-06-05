@@ -39,4 +39,5 @@ class BaseAgent(Agent):
         next_agent = userdata.agents[name]
         userdata.prev_agent = current_agent
 
-        return next_agent, f"Transferring to {name}." 
+        # return next_agent, f"Transferring to {name}." 
+        return next_agent, "" 
