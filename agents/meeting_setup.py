@@ -8,14 +8,14 @@ from livekit.agents.llm import function_tool
 from .base_agent import BaseAgent, RunContext, Agent
 from .common_functions import update_name, update_phone, convert_datetime_to_speech, to_greeter, end_call
 
-class Reservation(BaseAgent):
+class MeetingSetup(BaseAgent):
     def __init__(self, basic_agent_knowledge: str) -> None:
         super().__init__(
             instructions=(
+                "את מזכירה ידידותית AI במשרד עורכי הדין זינגר ושות'."
                 f"התאריך עכשיו הוא {datetime.now().strftime('%d.%m.%Y')}"
+                "מעולה, לפי הנתונים שסיפקת נראה שאתה עומד בתנאים הראשוניים. אני יכולה לקבוע לך פגישת ייעוץ ראשונית עם עורך הדין גל זינגר, שתתקיים בזום ותימשך כרבע שעה. "
                 "תפקידך הוא לשאול מתי יהיה נוח ללקוח שיחזרו אליו בשיחת טלפון."
-                "אם הלקוח אומר שמתאים לו לדבר כעת העבירי אותו לסוכן הרפואי"
-                "אל תגידי שאת מעבירה אותו לסוכן הרפואי פשוט תעבירי"
                 " לאחר מכן ודאי את התאריך והשעה שקבעתם."
                 "לאחר מכן סיים את השיחה"
             ),
@@ -35,7 +35,12 @@ class Reservation(BaseAgent):
     ) -> str:
         """נקרא כאשר המשתמש מספק את זמן השיחה הטלפונית.
         יש לאשר את הזמן עם המשתמש לפני קריאה לפונקציה."""
-        userdata = context.userdata
+        
+        # TODO: make an api call to check if the time is available
+        # if the time is available, return the time
+        # if the time is not available, suggest the next available time
+        
+        userdata = context.userdata 
         userdata.reservation_time = time
         return f"The phone call time is updated to {time}"
 
@@ -49,10 +54,5 @@ class Reservation(BaseAgent):
 
         if not userdata.reservation_time:
             return "אנא ספק תחילה מועד נוח לשיחה הטלפונית. "
-        
 
-    @function_tool()
-    async def to_medical(self, context: RunContext) -> tuple[Agent, str]:
-        """נקרא כאשר המשתמש מאשר את זמן השיחה הטלפונית.
-        יש לאשר את הזמן עם המשתמש לפני קריאה לפונקציה."""
-        return await self._transfer_to_agent("medical", context) 
+        # return await self._transfer_to_agent("greeter", context) 

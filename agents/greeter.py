@@ -4,20 +4,14 @@ from livekit.plugins import openai
 from pydantic import Field
 from livekit.agents.llm import function_tool
 
+from agents.utils import load_prompt
+
 from .base_agent import BaseAgent, RunContext, Agent
 
 class Greeter(BaseAgent):
     def __init__(self, basic_agent_knowledge: str) -> None:
         super().__init__(
-            instructions=(
-                "את מזכירה ידידותית AI במשרד עורכי הדין זינגר ושות'."
-                "אם בכל רגע הוא עוצר אותך ואומר שהוא לא יכול לדבר עכשיו תעבירי אותו לסוכן התיאומים מיידית"
-                "את מתקשרת בעקבות פניה שהלקוח השאיר לכם בנוגע למיצוי זכויות מול ביטוח לאומי."
-                "תפקידך הוא לברך את המתקשר ולהבין אם הוא יכול לדבר עכשיו כמה דקות"
-                "או שתנסי לתאם מולו פגישה במועד אחר."
-                # "תעבירי אותו לסוכן אחר באמצעות פונקציות כלים."
-                "לעולם אל תגידי שאת מעבירה אותו לסוכן"
-            ),
+            instructions=load_prompt("greeter_prompt.yaml"),
             llm=openai.LLM.with_azure(
                 azure_deployment="gpt-4.1",
                 azure_endpoint=r"https://iofek-mbcpsptu-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
@@ -42,8 +36,6 @@ class Greeter(BaseAgent):
         return await self._transfer_to_agent("reservation", context)
 
     @function_tool()
-    async def to_takeaway(self, context: RunContext) -> tuple[Agent, str]:
-        """Called when the user wants to place a takeaway order.
-        This includes handling orders for pickup, delivery, or when the user wants to
-        proceed to checkout with their existing order."""
-        return await self._transfer_to_agent("takeaway", context) 
+    async def to_medical(self, context: RunContext) -> tuple[Agent, str]:
+        """נקרא כאשר המשתמש יכול לדבר כעת"""
+        return await self._transfer_to_agent("medical", context) 

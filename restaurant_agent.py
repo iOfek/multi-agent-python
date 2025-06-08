@@ -14,6 +14,15 @@ from agents import (
     Takeaway,
     Checkout,
 )
+from agents.adhd_specialist import AdhdSpecialist
+from agents.eligibility import Eligibility
+from agents.fibro_specialist import FibroSpecialist
+from agents.medical import Medical
+from agents.meeting_setup import MeetingSetup
+from agents.migraine_specialist import MigraineSpecialist
+from agents.process_explanation import ProcessExplanation
+from agents.psyche_specialist import PsycheSpecialist
+from agents.specialist import Specialist
 
 logger = logging.getLogger("restaurant-example")
 logger.setLevel(logging.INFO)
@@ -31,6 +40,15 @@ async def entrypoint(ctx: JobContext):
             "reservation": Reservation(basic_agent_knowledge),
             "takeaway": Takeaway(basic_agent_knowledge),
             "checkout": Checkout(basic_agent_knowledge),
+            "medical": Medical(basic_agent_knowledge),
+            "eligibility": Eligibility(basic_agent_knowledge),
+            # "specialist": Specialist(basic_agent_knowledge),
+            "adhd_specialist": AdhdSpecialist(basic_agent_knowledge),
+            "psyche_specialist": PsycheSpecialist(basic_agent_knowledge),
+            "migraine_specialist": MigraineSpecialist(basic_agent_knowledge),
+            "fibro_specialist": FibroSpecialist(basic_agent_knowledge),
+            "meeting_setup": MeetingSetup(basic_agent_knowledge),
+            "process_explanation": ProcessExplanation(basic_agent_knowledge),
         }
     )
     session = AgentSession[UserData](
@@ -62,6 +80,8 @@ async def entrypoint(ctx: JobContext):
 
     await session.start(
         agent=userdata.agents["greeter"],
+        # agent=userdata.agents["eligibility"],
+        # agent=userdata.agents["medical"],
         room=ctx.room,
         room_input_options=RoomInputOptions(),
     )
