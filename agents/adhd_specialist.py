@@ -3,11 +3,11 @@ import logging
 from pydantic import Field
 from livekit.plugins import openai
 from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, RunContext
 
 from agents.utils import load_prompt
-
-from .base_agent import BaseAgent, RunContext, Agent
-from .common_functions import to_greeter
+from agents.base_agent import BaseAgent
+from agents.common_functions import to_greeter
 
 class AdhdSpecialist(BaseAgent):
     def __init__(self, basic_agent_knowledge: str) -> None:

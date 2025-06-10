@@ -12,12 +12,13 @@ from .common_functions import to_greeter
 class Medical(BaseAgent):
     def __init__(self, basic_agent_knowledge: str) -> None:
         super().__init__(
-            instructions=load_prompt("medical_prompt.yaml"),
+            instructions=load_prompt("medical_prompt.yaml") + "\n\n" +  "basic_agent_knowledge",
             tools=[
                 # to_greeter,
             ],
         )
         logger = logging.getLogger("medical-example")
+        
         logger.info(f"Medical agent initialized with basic agent knowledge: {basic_agent_knowledge}")
         self.basic_agent_knowledge = basic_agent_knowledge
 
