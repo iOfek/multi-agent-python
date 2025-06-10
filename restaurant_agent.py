@@ -67,7 +67,7 @@ async def entrypoint(ctx: JobContext):
             azure_endpoint=r"https://iofek-mbcpsptu-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
             api_key="4P3LarHA127RY4jDSABYaG5MA6QV4XrBpsJfK1LkjFOEsqcsTsz9JQQJ99BEACHYHv6XJ3w3AAAAACOGME7w",
             api_version="2025-01-01-preview",
-            temperature=0.5,
+            temperature=0.6,
         ),
         # llm=openai.LLM.with_azure(
         #     azure_deployment="gpt-4.1-nano",
