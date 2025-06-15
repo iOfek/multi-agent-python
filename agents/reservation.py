@@ -6,10 +6,10 @@ from livekit.plugins import openai
 from livekit.agents.llm import function_tool
 
 from .base_agent import BaseAgent, RunContext, Agent
-from .common_functions import update_name, update_phone, convert_datetime_to_speech, to_greeter, end_call
+# from .common_functions import end_call
 
-class Reservation(BaseAgent):
-    def __init__(self, basic_agent_knowledge: str) -> None:
+class Reservation(Agent):
+    def __init__(self) -> None:
         super().__init__(
             instructions=(
                 f"התאריך עכשיו הוא {datetime.now().strftime('%d.%m.%Y')}"
@@ -20,13 +20,18 @@ class Reservation(BaseAgent):
                 "לאחר מכן סיים את השיחה"
             ),
             
+
             # tools=[update_name, update_phone, convert_datetime_to_speech, to_greeter, end_call],
-            tools=[convert_datetime_to_speech,  end_call],
+            tools=[ ],
         )
-        logger = logging.getLogger("restaurant-example")
-        logger.info(f"Reservation agent initialized with basic agent knowledge: {basic_agent_knowledge}")
-        logger.info(f"התאריך עכשיו הוא {datetime.now().strftime('%d.%m.%Y')}")
-        self.basic_agent_knowledge = basic_agent_knowledge
+        logger=logging.getLogger("restaurant-example")
+        logger.info("Reservation agent initialized")    
+
+    async def on_enter(self):
+        # when the agent is added to the session, we'll initiate the conversation by
+        # using the LLM to generate a reply
+        self.session.generate_reply()
+
 
     @function_tool()
     async def update_reservation_time(
@@ -51,9 +56,3 @@ class Reservation(BaseAgent):
         if not userdata.reservation_time:
             return "אנא ספק תחילה מועד נוח לשיחה הטלפונית. "
         
-
-    @function_tool()
-    async def to_medical(self, context: RunContext) -> tuple[Agent, str]:
-        """נקרא כאשר המשתמש מאשר את זמן השיחה הטלפונית.
-        יש לאשר את הזמן עם המשתמש לפני קריאה לפונקציה."""
-        return await self._transfer_to_agent("medical", context) 

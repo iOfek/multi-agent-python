@@ -5,6 +5,8 @@ from livekit.agents.llm import function_tool
 from livekit.agents import get_job_context
 from livekit import api
 
+from agents.reservation import Reservation
+
 from .types import UserData
 from .base_agent import RunContext, Agent
 
@@ -100,3 +102,10 @@ def convert_datetime_to_speech(
     hour = hour_map[dt.hour]
 
     return f"{day} ב{month} בשעה {hour}"
+
+
+@function_tool()
+async def to_reservation(context: RunContext) -> Agent:
+    """נקרא כאשר המשתמש לא פנוי לשוחח כעת.
+ הפונקציה תאסוף את הפרטים הדרושים - תאריך ומעד הפגישה."""
+    return Reservation()

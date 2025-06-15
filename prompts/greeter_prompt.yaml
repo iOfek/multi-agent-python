@@ -30,6 +30,7 @@ instructions: |
   - checkEligibility(userData)        → מחזיר { eligible: bool, reason: string }.
   - bookLawyerSlot(slotId)            → קובע פגישה ומחזיר אישור.
   - sendConfirmation(channel, text)   → שולח SMS/WhatsApp/Email.
+  - to_reservation()                  → מעביר לסוכן של תיאום פגישה.
 
   ## Other details
   - Keep responses short and segmented—ideally one to two concise sentences per step.
@@ -47,13 +48,12 @@ instructions: |
     instructions:
       - "פתחי: \"שלום, אני מתקשרת בקשר לפנייה שלך למימון לימודים, האם אפשר לדבר?\""
       - "אם שואל \"על מה מדובר?\": \"השארת פרטים על מימון לימודים של עד 65,000 ש\"ח בעקבות מגבלות רפואיות, כנראה בפייסבוק או באינסטגרם. האם זה זמן נוח לדבר?\""
+      - אם הלקוח משיב 'לא' אז תקרא ל to_reservation()
     examples:
       - "שלום, כאן מערכת זינגר AI. האם זה זמן נוח לדבר?"
     transitions:
       - next_step: 3_introduce_self
         condition: הלקוח פנוי
-      - next_step: 9_schedule_meeting
-        condition: הלקוח לא פנוי
 
   - id: 3_introduce_self
     description: הצגת הזהות ומטרת השאלון.
