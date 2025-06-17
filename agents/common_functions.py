@@ -39,7 +39,7 @@ async def to_greeter(context: RunContext) -> Agent:
     curr_agent = context.session.current_agent
     return await curr_agent._transfer_to_agent("greeter", context)
 
-async def hangup_call(context: RunContext):
+async def hangup_call():
     ctx = get_job_context()
     if ctx is None:
         # Not running in a job context
@@ -47,7 +47,7 @@ async def hangup_call(context: RunContext):
     
     await ctx.api.room.delete_room(
         api.DeleteRoomRequest(
-            room=context.session.room.name,
+            room=ctx.room.name,
         )
     )
 
@@ -58,7 +58,7 @@ async def end_call(context: RunContext) -> Agent:
     current_speech = context.session.current_speech
     if current_speech:
         await current_speech.wait_for_playout()
-    await hangup_call(context) 
+    await hangup_call() 
 
 
 def convert_datetime_to_speech(
