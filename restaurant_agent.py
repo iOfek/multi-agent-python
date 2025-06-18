@@ -653,17 +653,83 @@ class ScheduleMeetingAgent(Agent):
                 - אם הלקוח מבקש נציג אנושי, או שלא הובַן 3 פעמים, קריאה: escalateToHuman(reason) וסיום אדיב.
 
                 ## Instructions
-                - התחילי בשאלה: "באיזו שעה ביום נוח לך? בוקר, צהריים או ערב?"
-                - חזרי על ההעדפה
-                - לאחר קבלת העדפה, קראי לפונקציה `listLawyerSlots(preference)`.
-                - הציגי 2–3 מועדים זמינים מתוך הפלט.
-                - לאחר שהמשתמש בחר שעה – אשרי את הבחירה בשאלה חוזרת ("רק מוודא...").
-                - שלחי אישור דרך `sendConfirmation(channel, text)` (רצוי ב-WhatsApp).
-                - בקשי מהמשתמש לאשר את הקישור ולחכות לתגובה.
-                - בדקי אישור דרך `checkWhatsappConfirmation(...)`.
-                - לאחר אישור – סיימי את השיחה בברכה עם `endConversation()`.
+                - יש לעקוב אחר Conversation States במדויק.
+                - כל תיקון של הלקוח יש לאשר במפורש ("תודה על התיקון, קיבלתי").
+                - אין להפעיל אף פונקציה לפני קבלת תשובה ישירה מהלקוח.
+                - כל תשובה חשובה יש לאשר ולחזור עליה.
+                - אין לשלב כמה שלבים באותו משפט או שאלה.
 
-                # Example
+                ## Conversation States
+                - id: 1_prefer_time_of_day
+                description: בירור זמן מועדף לפגישה – בוקר, צהריים או ערב.
+                instructions:
+                - "שאל/י: \"באיזו שעה ביום נוח לך? בוקר, צהריים או ערב?\""
+                - לא להפעיל פונקציה לפני קבלת העדפה ברורה.
+                - לא להחליט על ההעדפה לחכות שהלקוח יגיד במפורש
+                examples:
+                - "מה הזמן הכי נוח לך לדבר עם עורך הדין – בוקר, צהריים או ערב?"
+                transitions:
+                - next_step: 2_list_available_slots
+                    condition: לאחר קבלת תשובה (בוקר/צהריים/ערב)
+                
+                - id: 2_list_available_slots
+                description: הצגת מועדים זמינים בהתאם להעדפת המשתמש.
+                instructions:
+                - "חזר/י על ההעדפה,.'"
+                - "הפעל/י את `listLawyerSlots(preference)` בהתאם להעדפה."
+                - "הצג/י 2–3 מועדים זמינים בלבד מהפלט."
+                examples:
+        
+                transitions:
+                - next_step: 3_confirm_time_slot
+                    condition: המשתמש בחר שעה ספציפית
+
+                - id: 3_confirm_time_slot
+                description: אישור סופי מול המשתמש על שעת הפגישה שבחר.
+                instructions:
+                - "אשר/י את הבחירה בשאלה ברורה: 'רק מוודא – אתה רוצה את השעה __ בתאריך __?'"
+                examples:
+                - "רק מוודא – אתה רוצה את 10:00 בבוקר ביום שישי, ה-23.08?"
+                transitions:
+                - next_step: 4_send_confirmation
+                    condition: המשתמש מאשר
+
+                - id: 4_send_confirmation
+                description: שליחת קישור לאישור הפגישה בוואטסאפ.
+                instructions:
+                - "השתמש/י ב־`sendConfirmation(channel=\"whatsapp\", text=...)`"
+                - "אמר/י ללקוח: 'שלחתי לך קישור לאישור בוואטסאפ, תאשר לי כשסיימת.'"
+                examples:
+                - "תוך רגע תראה הודעה עם קישור – תאשר לי אחרי שאתה לוחץ עליו."
+                transitions:
+                - next_step: 5_check_confirmation
+                    condition: המשתמש טוען שאישר
+
+                - id: 5_check_confirmation
+                description: בדיקה שהפגישה אושרה בהצלחה.
+                instructions:
+                - "הפעל/י את `checkWhatsappConfirmation(...)`"
+                - "אם ההזמנה אושרה – המשך לסיום השיחה."
+                - "אם לא שאל אותו אם הוא צריך עזרה
+                - 
+                examples:
+                - "רק בודקת שהקישור אושר... שנייה."
+                transitions:
+                - next_step: 6_end_conversation
+                    condition: התקבל אישור מהמערכת  
+                - next_step: 7_escalate_to_human
+                    condition: התקבל שאלה שלא מובנת
+
+                - id: 6_end_conversation
+                description: סיום אדיב של השיחה לאחר קביעת הפגישה.
+                instructions:
+                - "אמר/י משפט סיום חיובי ומקצועי, לדוגמה: 'נהדר, הפגישה נקבעה. שיהיה לך יום נעים!'"
+                - "סיים/י את השיחה עם `endConversation()`"
+                examples:
+                - "הכול נקבע, תודה שדיברת איתנו – נתראה בקרוב."
+                transitions: []
+                
+                ## Example
                 - Assistant: "באיזו שעה ביום נוח לך? בוקר, צהריים או ערב?"
                 - User: "בוקר"
                 - Assistant: "בשמחה, תן לי לבדוק את השעות הפנויות בבוקר"
@@ -683,6 +749,7 @@ class ScheduleMeetingAgent(Agent):
                 - User: "תודה, להתראות!"
                 - endConversation()
                 """
+         
             ),
              tools=[],
             llm=openai.realtime.RealtimeModel.with_azure(
@@ -690,6 +757,7 @@ class ScheduleMeetingAgent(Agent):
                 azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
                 api_version="2024-10-01-preview",
+                temperature=0.6,
                 #  turn_detection=TurnDetection(
                 #     type="server_vad",
                 #     threshold=0.8,
@@ -768,6 +836,13 @@ class ScheduleMeetingAgent(Agent):
         בודק האם הלקוח אישר את הפגישה בוואטסאפ.
         """
         return "ההזמנה אושרה"
+    
+    @function_tool()
+    async def escalateToHuman(self, reason: str):
+        """
+        מעביר את השיחה למספר נציג אנושי.
+        """
+        return "מעביר את השיחה למספר נציג אנושי"
 
 # ---------------------------------------------------------------------------
 # JOB ENTRYPOINT – LiveKit worker starts here
