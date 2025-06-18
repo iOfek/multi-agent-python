@@ -20,7 +20,7 @@ from agents import (
     Checkout,
 )
 from agents.adhd_specialist import AdhdSpecialist
-from agents.common_functions import end_call
+from agents.common_functions import end_call, convert_datetime_to_speech
 from agents.eligibility import Eligibility
 from agents.fibro_specialist import FibroSpecialist
 from agents.medical import Medical
@@ -444,7 +444,7 @@ class NotEligibleAgent(Agent):
                     - "updateCRM(\"לקוח אינו זכאי למלגת מימון לימודים\")"
                     - "אמור/י: \"נראה שאתה לא מתאים למלגה. אם תרצה לבדוק זכויות בעקבות תאונת עבודה או נושאים משפטיים אחרים, ניתן לקבוע פגישה עם עורך-דין ממשרדנו. תרצה לקבוע פגישה?\""
                     - "אם הלקוח משיב 'לא' אז תקרא ל endConversation()"
-                    - "אם הלקוח משיב 'כן' אז תקרא ל to_reservation()"
+                    - "אם הלקוח משיב 'כן' אז תקרא ל to_schedule_meeting(isEligible=False)"
                     examples:
                     - "האם תרצה לתאם פגישת ייעוץ בנושאים משפטיים אחרים?"
                 """
@@ -558,27 +558,6 @@ class ProcessExplanationAgent(Agent):
                     transitions:
                     - next_step: 9_schedule_meeting
                         condition: הלקוח מבין ומעוניין להמשיך
-
-                - id: 9_schedule_meeting
-                    description: קביעת פגישת ייעוץ עם עורך הדין גל זינגר.
-                    instructions:
-                    - "שאל/י: \"מה מועד נוח לך בבוקר, צהריים או ערב?\""
-                    - "קבל/י העדפה → listLawyerSlots(preference) והצג/י 2-3 אפשרויות."
-                    - "לאחר בחירת הלקוח → bookLawyerSlot(time_slot)."
-                    - "מצוין, קבעתי ל-__ בתאריך __ בשעה __. תקבל/י קישור לזום ותזכורת."
-                    examples:
-                    - "האם יום שלישי בבוקר מתאים?"
-                    transitions:
-                    - next_step: 13_closing
-                        condition: הפגישה נקבעה ואושרה
-
-                - id: 13_closing
-                    description: סיום אדיב ומקצועי.
-                    instructions:
-                    - "תודה רבה על זמנך, מחכים לראותך בפגישה. יום נעים והמשך בריאות!"
-                    examples:
-                    - "יום נפלא!"
-                    transitions: []
                 """
             ),
              tools=[],
@@ -627,6 +606,7 @@ class ProcessExplanationAgent(Agent):
 # ---------------------------------------------------------------------------
 
 class ScheduleMeetingAgent(Agent):
+    isEligible = True  # If you want this as a class variable
     """Realtime agent that schedules meetings with the lawyer."""
 
     def __init__(self, supervisor) -> None:
@@ -660,8 +640,8 @@ class ScheduleMeetingAgent(Agent):
 
                 ## Function Tools
                 - listLawyerSlots(preference)       → מחזיר רשימת מועדי פגישה זמינים.
-                - bookLawyerSlot(slotId)            → קובע פגישה ומחזיר אישור.
                 - sendConfirmation(channel, text)   → שולח SMS/WhatsApp/Email.
+                - checkWhatsappConfirmation(channel, text) → בודק האם הלקוח אישר את הפגישה בוואטסאפ.
                 - endConversation()                 → סיום השיחה.
 
                 ## Other details
@@ -673,31 +653,35 @@ class ScheduleMeetingAgent(Agent):
                 - אם הלקוח מבקש נציג אנושי, או שלא הובַן 3 פעמים, קריאה: escalateToHuman(reason) וסיום אדיב.
 
                 ## Instructions
-                - יש לעקוב אחר Conversation States במדויק.
-                - כל שינוי או תיקון שחוזר הלקוח – אשר-י במפורש.
+                - התחילי בשאלה: "באיזו שעה ביום נוח לך? בוקר, צהריים או ערב?"
+                - חזרי על ההעדפה
+                - לאחר קבלת העדפה, קראי לפונקציה `listLawyerSlots(preference)`.
+                - הציגי 2–3 מועדים זמינים מתוך הפלט.
+                - לאחר שהמשתמש בחר שעה – אשרי את הבחירה בשאלה חוזרת ("רק מוודא...").
+                - שלחי אישור דרך `sendConfirmation(channel, text)` (רצוי ב-WhatsApp).
+                - בקשי מהמשתמש לאשר את הקישור ולחכות לתגובה.
+                - בדקי אישור דרך `checkWhatsappConfirmation(...)`.
+                - לאחר אישור – סיימי את השיחה בברכה עם `endConversation()`.
 
-                ## Conversation States
-                
-                - id: 9_schedule_meeting
-                    description: קביעת פגישת ייעוץ עם עורך הדין גל זינגר.
-                    instructions:
-                    - "שאל/י: \"מה מועד נוח לך בבוקר, צהריים או ערב?\""
-                    - "קבל/י העדפה → listLawyerSlots(preference) והצג/י 2-3 אפשרויות."
-                    - "לאחר בחירת הלקוח → bookLawyerSlot(time_slot)."
-                    - "מצוין, קבעתי ל-__ בתאריך __ בשעה __. תקבל/י קישור לזום ותזכורת."
-                    examples:
-                    - "האם יום שלישי בבוקר מתאים?"
-                    transitions:
-                    - next_step: 13_closing
-                        condition: הפגישה נקבעה ואושרה
-
-                - id: 13_closing
-                    description: סיום אדיב ומקצועי.
-                    instructions:
-                    - "תודה רבה על זמנך, מחכים לראותך בפגישה. יום נעים והמשך בריאות!"
-                    examples:
-                    - "יום נפלא!"
-                    transitions: []
+                # Example
+                - Assistant: "באיזו שעה ביום נוח לך? בוקר, צהריים או ערב?"
+                - User: "בוקר"
+                - Assistant: "בשמחה, תן לי לבדוק את השעות הפנויות בבוקר"
+                - listLawyerSlots(preference="בוקר")
+                    - listLawyerSlots(): "# הודעה\nשעות פנויות בבוקר: 10:00, 11:00, 12:00 בתאריך 23.08.2024"
+                - Assistant: "אוקיי, רואה שיש 3 שעות פנויות בבוקר: 10:00, 11:00, 12:00 בתאריך 23.08.2024. איזו שעה אתה רוצה לקבוע?"
+                - User: "10:00"
+                - Assistant: "רק מוודא – אתה רוצה לקבוע לשעה 10:00 בתאריך 23.08.2024?"
+                - User: "כן"
+                - Assistant: "מצוין, אשלח לך הודעת וואטסאפ עם קישור לאישור. אנא אשר את ההזמנה בלחיצה על הקישור"
+                - sendConfirmation(channel="whatsapp", text="10:00 בתאריך 23.08.2024?")
+                - Assistant: "שלחתי לך הודעת וואטסאפ עם קישור לאישור, תגיד לי כשאישרת"
+                - User: "לחצתי על הקישור ואישרתי את ההזמנה"
+                - checkWhatsappConfirmation(channel="whatsapp", text="10:00 בתאריך 23.08.2024?")
+                    - checkWhatsappConfirmation(): "# הודעה\nההזמנה אושרה"
+                - Assistant: "נהדר, קבעתי לך את התור. שיהיה לך יום נעים!"
+                - User: "תודה, להתראות!"
+                - endConversation()
                 """
             ),
              tools=[],
@@ -740,6 +724,50 @@ class ScheduleMeetingAgent(Agent):
         סיום השיחה.
         """
         await end_call(context)
+
+    @function_tool()
+    async def listLawyerSlots(self, preference: str):
+        """
+        מחזיר רשימת מועדי פגישה זמינים.
+        """
+        # Mock slotId to date/time mapping for demo
+        slot_map = {
+            "morning": [
+                ("123", "23.08.2024", "10:00"),
+                ("456", "23.08.2024", "11:00"),
+            ],
+            "afternoon": [
+                ("789", "24.08.2024", "12:00"),
+                ("101", "24.08.2024", "13:00"),
+            ],
+        }
+        slots = slot_map.get(preference, slot_map["morning"])
+        result = []
+        for slotId, date_str, time_str in slots:
+            spoken = convert_datetime_to_speech(date_str, time_str)
+            result.append({
+                "slotId": slotId,
+                "date": date_str,
+                "time": time_str,
+                "spoken": spoken
+            })
+        return result
+
+   
+
+    @function_tool()
+    async def sendConfirmation(self, channel: str, text: str):
+        """
+        שולח SMS/WhatsApp/Email.
+        """
+        return "הודעה נשלחה בהצלחה"
+    
+    @function_tool()
+    async def checkWhatsappConfirmation(self, channel: str, text: str):
+        """
+        בודק האם הלקוח אישר את הפגישה בוואטסאפ.
+        """
+        return "ההזמנה אושרה"
 
 # ---------------------------------------------------------------------------
 # JOB ENTRYPOINT – LiveKit worker starts here
@@ -811,7 +839,8 @@ async def entrypoint(ctx: JobContext):
     )
 
     await session.start(
-        agent=chat,
+        # agent=chat,
+        agent=ScheduleMeetingAgent(supervisor),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVCTelephony(),

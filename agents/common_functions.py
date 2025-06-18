@@ -63,6 +63,7 @@ async def end_call(context: RunContext) -> Agent:
 
 def convert_datetime_to_speech(
     date_str: str,
+    time_str: str,
 ) -> str:
     """
     Converts a date and time into natural spoken Hebrew, like:
@@ -93,8 +94,6 @@ def convert_datetime_to_speech(
         17: "חמש בערב", 18: "שש בערב", 19: "שבע בערב", 20: "שמונה בערב", 21: "תשע בערב", 22: "עשר בערב",
         23: "אחת עשרה בלילה", 24: "שתיים עשרה בלילה"
     }
-    date_str = datetime.strptime(date_str, "%d.%m.%Y")
-    time_str = datetime.strptime(time_str, "%H:%M")
     # Parse date and time
     dt = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
     day = day_map[dt.day]
