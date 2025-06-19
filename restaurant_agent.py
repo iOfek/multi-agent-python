@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+import json
 import logging
 import os
 from dotenv import load_dotenv
@@ -610,7 +611,7 @@ class ScheduleMeetingAgent(Agent):
     """Realtime agent that schedules meetings with the lawyer."""
 
     def __init__(self, supervisor) -> None:
-        self.supervisor = supervisor
+        # self.supervisor = supervisor
         super().__init__(
             instructions=(
                 """
@@ -752,16 +753,27 @@ class ScheduleMeetingAgent(Agent):
          
             ),
              tools=[],
-            llm=openai.realtime.RealtimeModel.with_azure(
-                azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
-                api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
-                api_version="2024-10-01-preview",
-                temperature=0.6,
+            # llm=openai.realtime.RealtimeModel.with_azure(
+            #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
+            #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
+            #     api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
+            #     api_version="2024-10-01-preview",
+            #     #  turn_detection=TurnDetection(
+            #     #     type="server_vad",
+            #     #     threshold=0.8,
+            #     #     prefix_padding_ms=300,
+            #     #     silence_duration_ms=500,
+            #     #     create_response=True,
+            #     #     interrupt_response=False,
+            #     # )
+            #     # voice="coral"
+            # ),
+            llm=openai.realtime.RealtimeModel(
+                model="gpt-4o-realtime-preview",
+                api_key=os.getenv("OPENAI_API_KEY"),
                 #  turn_detection=TurnDetection(
                 #     type="server_vad",
                 #     threshold=0.8,
-                #     prefix_padding_ms=300,
                 #     silence_duration_ms=500,
                 #     create_response=True,
                 #     interrupt_response=False,
@@ -796,6 +808,7 @@ class ScheduleMeetingAgent(Agent):
     @function_tool()
     async def listLawyerSlots(self, preference: str):
         """
+        נקרא כאשר הלקוח בחר זמן ביום נוח לו.
         מחזיר רשימת מועדי פגישה זמינים.
         """
         # Mock slotId to date/time mapping for demo
@@ -891,21 +904,21 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         # OPENAI STT LLM TTS
-        stt=openai.STT.with_azure(
-            azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_DEPLOYMENT"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_ENDPOINT"),
-            api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
-            api_version="2025-03-01-preview",
-            language="he",
-        ),
-        tts=openai.TTS.with_azure(
-            instructions=load_prompt("tts_prompt.yaml"),
-            azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_MINI_TTS_DEPLOYMENT"),
-            voice="coral",
-            azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_MINI_TTS_ENDPOINT"),
-            api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
-            api_version="2025-03-01-preview",
-        ),
+        # stt=openai.STT.with_azure(
+        #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_DEPLOYMENT"),
+        #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_ENDPOINT"),
+        #     api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
+        #     api_version="2025-03-01-preview",
+        #     language="he",
+        # ),
+        # tts=openai.TTS.with_azure(
+        #     instructions=load_prompt("tts_prompt.yaml"),
+        #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_MINI_TTS_DEPLOYMENT"),
+        #     voice="coral",
+        #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_MINI_TTS_ENDPOINT"),
+        #     api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
+        #     api_version="2025-03-01-preview",
+        # ),
 
 
         vad=silero.VAD.load(),
@@ -913,22 +926,73 @@ async def entrypoint(ctx: JobContext):
         # allow_interruptions=False,
     )
 
-    await session.start(
+    # Connect to the room and greet the user
+    await ctx.connect()
+
+
+    dial_info = json.loads(ctx.job.metadata)
+    participant_identity = phone_number = dial_info["phone_number"]
+
+    agent = ScheduleMeetingAgent(supervisor)
+
+    # start the session first before dialing, to ensure that when the user picks up
+    # the agent does not miss anything the user says
+    session_started = asyncio.create_task(session.start(
         # agent=chat,
-        agent=ScheduleMeetingAgent(supervisor),
+        agent=agent,
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVCTelephony(),
         ),
-    )
+    ))
 
-    # Connect to the room and greet the user
-    await ctx.connect()
+        # If a phone number was provided, then place an outbound call
+    # By having a condition like this, you can use the same agent for inbound/outbound telephony as well as web/mobile/etc.
+    dial_info = json.loads(ctx.job.metadata)
+    phone_number = dial_info["phone_number"]
+
+    # The participant's identity can be anything you want, but this example uses the phone number itself
+    sip_participant_identity = "+97233763938"
+    if phone_number is not None:
+        # The outbound call will be placed after this method is executed
+        try:
+            await ctx.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
+                # This ensures the participant joins the correct room
+                room_name=ctx.room.name,
+
+                # This is the outbound trunk ID to use (i.e. which phone number the call will come from)
+                # You can get this from LiveKit CLI with `lk sip outbound list`
+                sip_trunk_id=os.getenv("SIP_OUTBOUND_TRUNK_ID",'ST_M9oEP2HMo4qU'),
+
+                # The outbound phone number to dial and identity to use
+                sip_call_to=phone_number,
+                participant_identity=sip_participant_identity,
+
+                # This will wait until the call is answered before returning
+                wait_until_answered=True,
+            ))
+
+                
+            # wait for the agent session start and participant join
+            await session_started
+            participant = await ctx.wait_for_participant(identity=participant_identity)
+            logger.info(f"participant joined: {participant.identity}")
+
+            agent.set_participant(participant)
+
+            print("call picked up successfully")
+        except api.TwirpError as e:
+            print(f"error creating SIP participant: {e.message}, "
+                  f"SIP status: {e.metadata.get('sip_status_code')} "
+                  f"{e.metadata.get('sip_status')}")
+            ctx.shutdown()
+
+
     # await session.generate_reply(instructions="שלום! איך אפשר לעזור?")
-    await session.generate_reply()
+    # await session.generate_reply()
 
 
     # await lkapi.aclose()
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint,agent_name="my-telephony-agent"))

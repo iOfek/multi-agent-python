@@ -1,0 +1,11 @@
+{
+    "trunk": {
+        "name": "My outbound trunk",
+        "address": "livekitout.pstn.twilio.com",
+        "numbers": [
+            "+97233763938"
+        ],
+        "auth_username": "iOfek",
+        "auth_password": "Admataiyan15"
+    }
+}
