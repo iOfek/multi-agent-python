@@ -1,6 +1,6 @@
 livekit~=1.0
-livekit-agents[google,silero,turn-detector,openai]~=1.1.2
-livekit-plugins-openai~=1.1.2
+livekit-agents[google,silero,turn-detector,openai]==1.1.1
+livekit-plugins-openai==1.1.1
 livekit-plugins-noise-cancellation~=0.2
 python-dotenv~=1.0
 pyngrok~=6.0
