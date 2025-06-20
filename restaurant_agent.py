@@ -930,9 +930,19 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
 
-    dial_info = json.loads(ctx.job.metadata)
-    participant_identity = phone_number = dial_info["phone_number"]
+    # Handle null/empty metadata
+    phone_number = None
+    try:
+        if ctx.job.metadata and ctx.job.metadata.strip():
+            dial_info = json.loads(ctx.job.metadata)
+            phone_number = dial_info.get("phone_number")
+    except (json.JSONDecodeError, AttributeError) as e:
+        logger.warning(f"Failed to parse job metadata: {e}")
+        phone_number = None
 
+    # The participant's identity can be anything you want, but this example uses the phone number itself
+    sip_participant_identity = "+97233763938"
+    
     agent = ScheduleMeetingAgent(supervisor)
 
     # start the session first before dialing, to ensure that when the user picks up
@@ -946,16 +956,13 @@ async def entrypoint(ctx: JobContext):
         ),
     ))
 
-        # If a phone number was provided, then place an outbound call
+    # If a phone number was provided, then place an outbound call
     # By having a condition like this, you can use the same agent for inbound/outbound telephony as well as web/mobile/etc.
-    dial_info = json.loads(ctx.job.metadata)
-    phone_number = dial_info["phone_number"]
-
-    # The participant's identity can be anything you want, but this example uses the phone number itself
-    sip_participant_identity = "+97233763938"
+    
     if phone_number is not None:
         # The outbound call will be placed after this method is executed
         try:
+            print(f"Creating SIP participant for phone number: {phone_number}")
             await ctx.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
                 # This ensures the participant joins the correct room
                 room_name=ctx.room.name,
@@ -974,8 +981,7 @@ async def entrypoint(ctx: JobContext):
 
                 
             # wait for the agent session start and participant join
-            await session_started
-            participant = await ctx.wait_for_participant(identity=participant_identity)
+            participant = await ctx.wait_for_participant(identity=sip_participant_identity)
             logger.info(f"participant joined: {participant.identity}")
 
             agent.set_participant(participant)
@@ -986,7 +992,8 @@ async def entrypoint(ctx: JobContext):
                   f"SIP status: {e.metadata.get('sip_status_code')} "
                   f"{e.metadata.get('sip_status')}")
             ctx.shutdown()
-
+    print("session_started", session_started)
+    await session_started
 
     # await session.generate_reply(instructions="שלום! איך אפשר לעזור?")
     # await session.generate_reply()

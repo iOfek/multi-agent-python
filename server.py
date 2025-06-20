@@ -1,4 +1,5 @@
 import random
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from pyngrok import ngrok
 import os
@@ -19,6 +20,7 @@ app = FastAPI()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+load_dotenv()
 
 # ClickUp webhook secret - you should set this as an environment variable
 CLICKUP_WEBHOOK_SECRET = os.getenv('CLICKUP_WEBHOOK_SECRET', 'your-webhook-secret-here')
@@ -41,13 +43,11 @@ lkapi = None
 
 def get_livekit_api():
     """Get or create LiveKit API instance"""
-    global lkapi
-    if lkapi is None and LIVEKIT_URL and LIVEKIT_API_KEY and LIVEKIT_API_SECRET:
-        lkapi = api.LiveKitAPI(
-            url=LIVEKIT_URL,
-            api_key=LIVEKIT_API_KEY,
-            api_secret=LIVEKIT_API_SECRET
-        )
+    lkapi = api.LiveKitAPI(
+        url=LIVEKIT_URL,
+        api_key=LIVEKIT_API_KEY,
+        api_secret=LIVEKIT_API_SECRET
+    )
     return lkapi
 
 def verify_clickup_signature(request_body, signature):
@@ -99,20 +99,26 @@ async def clickup_webhook(request: Request):
             phone_number = extract_phone_number_from_task(data)
             
             if phone_number:
-                # Make outbound call asynchronously - now we can use await directly!
-                livekit_api = get_livekit_api()
-                if livekit_api:
-                    await livekit_api.agent_dispatch.create_dispatch(
-                        api.CreateAgentDispatchRequest(
-                            agent_name="my-telephony-agent", 
-                            room=f"outbound-{''.join(str(random.randint(0, 9)) for _ in range(10))}",
-                            metadata=f'{{"phone_number": "{phone_number}"}}'
+                if await add_phone_to_trunk(phone_number):
+                    # Make outbound call asynchronously - now we can use await directly!
+                    livekit_api = get_livekit_api()
+                    if livekit_api:
+                        await livekit_api.agent_dispatch.create_dispatch(
+                            api.CreateAgentDispatchRequest(
+                                agent_name="my-telephony-agent", 
+                                room=f"outbound-{''.join(str(random.randint(0, 9)) for _ in range(10))}",
+                                metadata=f'{{"phone_number": "{phone_number}"}}'
+                            )
                         )
-                    )
+                    else:
+                        print("LiveKit API not configured")
+                        raise HTTPException(status_code=400, detail="LiveKit API not configured")
                 else:
-                    print("LiveKit API not configured")
+                    print("Failed to add phone number to trunk")
+                    raise HTTPException(status_code=400, detail="Failed to add phone number to trunk")
             else:
                 print("No phone number found in task data")
+                raise HTTPException(status_code=400, detail="No phone number found in task data")
 
         return {"status": "success"}
     except Exception as e:
@@ -141,6 +147,109 @@ def extract_phone_number_from_task(task_data: dict) -> str:
 async def health_check():
     """Health check endpoint for monitoring"""
     return {"status": "healthy", "service": "clickup-webhook-server"}
+
+async def add_phone_to_trunk(phone_number: str):
+    """
+    Add a phone number to the SIP inbound trunk's allowed numbers
+    """
+    livekit_api = get_livekit_api()
+    print(livekit_api)
+    
+    try:
+        rules = await livekit_api.sip.list_sip_inbound_trunk(
+            api.ListSIPInboundTrunkRequest()
+        )
+        print(f"Raw rules object: {type(rules)}")
+        print(f"Rules content: {rules}")
+
+        # find the trunk with the id ST_QVWyiWtMs2Mu
+        org_trunk = next((trunk for trunk in rules.items if trunk.sip_trunk_id == os.getenv("SIP_INBOUND_TRUNK_ID")), None)
+        if org_trunk:
+            if phone_number not in org_trunk.allowed_numbers:
+                org_trunk.allowed_numbers.append(phone_number)
+            else:
+                print(f"Phone number {phone_number} already in allowed numbers")
+                return org_trunk
+        else:
+            print(f"Trunk with id {os.getenv('SIP_INBOUND_TRUNK_ID')} not found")
+            return {
+                "status": "error",
+                "message": "Trunk not found"
+            }
+        
+        trunk = await livekit_api.sip.update_sip_inbound_trunk(
+            trunk_id = os.getenv("SIP_INBOUND_TRUNK_ID"),
+            trunk = org_trunk
+        )
+        # print(f"Successfully updated trunk {trunk}")        
+
+        
+        return trunk
+        
+    except Exception as e:
+        print(f"Error in add_phone_to_trunk: {e}")
+        None
+    finally:
+        if livekit_api:
+            await livekit_api.aclose()
+
+async def remove_phone_from_trunk(phone_number: str):
+    """
+    Remove a phone number from the SIP inbound trunk's allowed numbers
+    """
+    livekit_api = get_livekit_api()
+    print(livekit_api)
+    
+    try:
+        rules = await livekit_api.sip.list_sip_inbound_trunk(
+            api.ListSIPInboundTrunkRequest()
+        )
+        print(f"Raw rules object: {type(rules)}")
+        print(f"Rules content: {rules}")
+
+        # find the trunk with the id ST_QVWyiWtMs2Mu
+        org_trunk = next((trunk for trunk in rules.items if trunk.sip_trunk_id == os.getenv("SIP_INBOUND_TRUNK_ID","ST_QVWyiWtMs2Mu")), None)
+        if org_trunk:
+            if phone_number in org_trunk.allowed_numbers:
+                org_trunk.allowed_numbers.remove(phone_number)
+                print(f"Trunk: {org_trunk}")
+            else:
+                print(f"Phone number {phone_number} not found in allowed numbers")
+                return None
+        else:
+            print(f"Trunk with id {os.getenv('SIP_INBOUND_TRUNK_ID')} not found")
+            return None
+        
+        trunk = await livekit_api.sip.update_sip_inbound_trunk(
+            trunk_id = os.getenv("SIP_INBOUND_TRUNK_ID"),
+            trunk = org_trunk
+        )
+        print(f"Successfully updated trunk {trunk}")        
+
+        return trunk
+        
+    except Exception as e:
+        print(f"Error in remove_phone_from_trunk: {e}")
+        return None
+    finally:
+        if livekit_api:
+            await livekit_api.aclose()
+
+@app.get('/livekit-remove-phone')
+async def livekit_remove_phone(request: Request):
+    """Health check endpoint for monitoring"""
+    if await remove_phone_from_trunk("+972527001042"):
+        return {"status": "success"}
+    else:
+        return {"status": "error"}
+
+@app.get('/livekit-add-phone')
+async def livekit_add_phone(request: Request):
+    """Health check endpoint for monitoring"""
+    if await add_phone_to_trunk("+972505536704"):
+        return {"status": "success"}
+    else:
+        return {"status": "error"}
 
 if __name__ == '__main__':
     import uvicorn

@@ -3,6 +3,7 @@
         "name": "My inbound trunk",
         "numbers": [
             "+97233763938"
-        ]
+        ],
+        "krisp_enabled": true
     }
 }
