@@ -3,6 +3,8 @@ from datetime import datetime
 import json
 import logging
 import os
+import tempfile
+import aiohttp
 from dotenv import load_dotenv
 
 from livekit.agents import JobContext, WorkerOptions, cli
@@ -33,6 +35,7 @@ from agents.other_specialist import OtherSpecialist
 from agents.specialist import Specialist
 from agents.utils import load_prompt
 
+from twilio.rest import Client
 
 # ---------------------------------------------------------------------------
 # ENV & GLOBALS
@@ -42,6 +45,10 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
+# ---------------------------------------------------------------------------
+# TWILIO CLIENT
+# ---------------------------------------------------------------------------
+client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
 
 # ---------------------------------------------------------------------------
 # SUPERVISOR AGENT – heavy‑lifting LLM + tools
@@ -211,8 +218,6 @@ class EligibilityAgent(Agent):
                 - bookLawyerSlot(slotId)            → קובע פגישה ומחזיר אישור.
                 - sendConfirmation(channel, text)   → שולח SMS/WhatsApp/Email.
                 - to_reservation()                  → מעביר לסוכן של תיאום פגישה.
-                - to_not_eligible()                  → מעביר לסוכן של תיאום פגישה.
-                - to_process_explanation()          → מעביר לסוכן של הסבר התהליך.
 
                 ## Other details
                 - Never allow the user to interrupt mid sentence.
@@ -610,8 +615,9 @@ class ScheduleMeetingAgent(Agent):
     isEligible = True  # If you want this as a class variable
     """Realtime agent that schedules meetings with the lawyer."""
 
-    def __init__(self, supervisor) -> None:
-        # self.supervisor = supervisor
+    def __init__(self, supervisor, phone_number: str = None) -> None:
+        self.supervisor = supervisor
+        self.phone_number = phone_number
         super().__init__(
             instructions=(
                 """
@@ -753,33 +759,33 @@ class ScheduleMeetingAgent(Agent):
          
             ),
              tools=[],
-            # llm=openai.realtime.RealtimeModel.with_azure(
-            #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
-            #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
-            #     api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
-            #     api_version="2024-10-01-preview",
-            #     #  turn_detection=TurnDetection(
-            #     #     type="server_vad",
-            #     #     threshold=0.8,
-            #     #     prefix_padding_ms=300,
-            #     #     silence_duration_ms=500,
-            #     #     create_response=True,
-            #     #     interrupt_response=False,
-            #     # )
-            #     # voice="coral"
-            # ),
-            llm=openai.realtime.RealtimeModel(
-                model="gpt-4o-realtime-preview",
-                api_key=os.getenv("OPENAI_API_KEY"),
+            llm=openai.realtime.RealtimeModel.with_azure(
+                azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
+                azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
+                api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
+                api_version="2024-10-01-preview",
                 #  turn_detection=TurnDetection(
                 #     type="server_vad",
                 #     threshold=0.8,
+                #     prefix_padding_ms=300,
                 #     silence_duration_ms=500,
                 #     create_response=True,
                 #     interrupt_response=False,
                 # )
                 # voice="coral"
             ),
+            # llm=openai.realtime.RealtimeModel(
+            #     model="gpt-4o-realtime-preview",
+            #     api_key=os.getenv("OPENAI_API_KEY"),
+            #     #  turn_detection=TurnDetection(
+            #     #     type="server_vad",
+            #     #     threshold=0.8,
+            #     #     silence_duration_ms=500,
+            #     #     create_response=True,
+            #     #     interrupt_response=False,
+            #     # )
+            #     # voice="coral"
+            # ),
 
             # llm=openai.LLM.with_azure(
             #     azure_deployment=os.getenv("AZURE_OPENAI_GPT41_DEPLOYMENT"),
@@ -789,6 +795,9 @@ class ScheduleMeetingAgent(Agent):
             # ),
         )
 
+    def set_participant(self, participant):
+        """Set the participant for this agent"""
+        self.participant = participant
 
     # Tool that triggers LiveKit's automatic handoff -----------------------
     @function_tool()
@@ -837,18 +846,69 @@ class ScheduleMeetingAgent(Agent):
    
 
     @function_tool()
-    async def sendConfirmation(self, channel: str, text: str):
+    async def sendConfirmation(self, channel: str, date: str):
         """
         שולח SMS/WhatsApp/Email.
         """
+        # Use the phone number stored in the agent
+        phone_number = self.phone_number or "+972527001042"
+        
+        # Format the phone number for WhatsApp
+        whatsapp_number = f"whatsapp:{phone_number}"
+        
+        message = client.messages.create(
+            from_='whatsapp:+14155238886',
+            content_sid='HXb5b62575e6e4ff6129ad7c8efe1f983e',
+            content_variables='{"1":"'+date+'","2":"3pm"}',
+            to=whatsapp_number
+        )
+        print(f"📱 WhatsApp confirmation sent to {whatsapp_number} for date: {date}")
         return "הודעה נשלחה בהצלחה"
     
     @function_tool()
     async def checkWhatsappConfirmation(self, channel: str, text: str):
         """
-        בודק האם הלקוח אישר את הפגישה בוואטסאפ.
+        בודק האם הלקוח אישר את הפגישה בוואטסאפ באמצעות polling mechanism.
         """
-        return "ההזמנה אושרה"
+        # Use the phone number stored in the agent
+        phone_number = self.phone_number or "+972527001042"
+        
+        # Server URL for checking confirmation status
+        server_url = os.getenv("SERVER_URL", "http://localhost:5000")
+        
+        # Poll the server for confirmation status
+        max_attempts = 10  # Maximum number of polling attempts
+        poll_interval = 2  # Seconds between polls
+        
+        for attempt in range(max_attempts):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = f"{server_url}/whatsapp-confirmation-status/{phone_number}"
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            status = data.get("status", {})
+                            
+                            if status.get("confirmed", False):
+                                print(f"✅ WhatsApp confirmation found for {phone_number}")
+                                return "ההזמנה אושרה"
+                            elif status.get("confirmed", False) == "false":
+                                print(f"❌ WhatsApp confirmation not found for {phone_number}")
+                                return "ההזמנה לא אושרה תרצה שנקבע מועד אחר?"
+                            else:
+                                print(f"⏳ No confirmation yet for {phone_number}, attempt {attempt + 1}/{max_attempts}")
+                        else:
+                            print(f"❌ Server error: {response.status}")
+                            
+            except Exception as e:
+                print(f"❌ Error polling server: {e}")
+            
+            # Wait before next poll (except on last attempt)
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(poll_interval)
+        
+        print(f"❌ No confirmation received after {max_attempts} attempts")
+        return "לא התקבל אישור מהמערכת"
     
     @function_tool()
     async def escalateToHuman(self, reason: str):
@@ -871,6 +931,24 @@ async def entrypoint(ctx: JobContext):
     #     empty_timeout=10 * 60,
     #     max_participants=20,
     # ))
+
+
+        # Add the following code to the top, before calling ctx.connect()
+    
+    async def write_transcript():
+        current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Use tempfile.gettempdir() for cross-platform compatibility
+        temp_dir = tempfile.gettempdir()
+        filename = os.path.join(temp_dir, f"transcript_{ctx.room.name}_{current_date}.json")
+        
+        with open(filename, 'w') as f:
+            json.dump(session.history.to_dict(), f, indent=2)
+            
+        print(f"Transcript for {ctx.room.name} saved to {filename}")
+
+    ctx.add_shutdown_callback(write_transcript)
+
 
     """Start the Chat‑Supervisor session when the agent job launches."""
 
@@ -904,13 +982,13 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         # OPENAI STT LLM TTS
-        # stt=openai.STT.with_azure(
-        #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_DEPLOYMENT"),
-        #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_ENDPOINT"),
-        #     api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
-        #     api_version="2025-03-01-preview",
-        #     language="he",
-        # ),
+        stt=openai.STT.with_azure(
+            azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_DEPLOYMENT"),
+            azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_ENDPOINT"),
+            api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
+            api_version="2025-03-01-preview",
+            language="he",
+        ),
         # tts=openai.TTS.with_azure(
         #     instructions=load_prompt("tts_prompt.yaml"),
         #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_MINI_TTS_DEPLOYMENT"),
@@ -943,7 +1021,7 @@ async def entrypoint(ctx: JobContext):
     # The participant's identity can be anything you want, but this example uses the phone number itself
     sip_participant_identity = "+97233763938"
     
-    agent = ScheduleMeetingAgent(supervisor)
+    agent = ScheduleMeetingAgent(supervisor, phone_number)
 
     # start the session first before dialing, to ensure that when the user picks up
     # the agent does not miss anything the user says

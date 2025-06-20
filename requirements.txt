@@ -1,8 +1,11 @@
 livekit~=1.0
-livekit-agents[google,silero,turn-detector,openai]~=1.0
-livekit-plugins-openai~=1.0
+livekit-agents[google,silero,turn-detector,openai]~=1.1.2
+livekit-plugins-openai~=1.1.2
 livekit-plugins-noise-cancellation~=0.2
 python-dotenv~=1.0
 pyngrok~=6.0
 fastapi~=0.115.6
 uvicorn~=0.34.0
+twilio~=9.0.0
+python-multipart~=0.0.20
+aiohttp~=3.10
