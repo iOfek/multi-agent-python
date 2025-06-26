@@ -49,3 +49,35 @@ class UserData:
         }
         # summarize in yaml performs better than json
         return yaml.dump(data) 
+
+@dataclass
+class ConfirmationTracking:
+    """Type for WhatsApp confirmation tracking data"""
+    phone_number: str
+    date: Optional[str] = None
+    time: Optional[str] = None
+    status: Optional[str] = None  # "pending", "approved", "declined"
+    sent_at: Optional[str] = None
+    answered_at: Optional[str] = None
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary format for storage"""
+        return {
+            "date": self.date,
+            "time": self.time,
+            "status": self.status,
+            "sent_at": self.sent_at,
+            "answered_at": self.answered_at
+        }
+    
+    @classmethod
+    def from_dict(cls, phone_number: str, data: dict) -> 'ConfirmationTracking':
+        """Create from dictionary format"""
+        return cls(
+            phone_number=phone_number,
+            date=data.get("date"),
+            time=data.get("time"),
+            status=data.get("status"),
+            sent_at=data.get("sent_at"),
+            answered_at=data.get("answered_at")
+        ) 

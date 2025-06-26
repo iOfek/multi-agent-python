@@ -69,6 +69,10 @@ def convert_datetime_to_speech(
     Converts a date and time into natural spoken Hebrew, like:
     'עשרים ושלושה באוגוסט בשעה חמש'
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"convert_datetime_to_speech called with date_str: '{date_str}', time_str: '{time_str}'")
 
     # Hebrew mappings
     day_map = {
@@ -88,19 +92,34 @@ def convert_datetime_to_speech(
     }
 
     hour_map = {
-        0: "שתים עשרה בלילה", 1: "אחת בבוקר", 2: "שתיים בבוקר", 3: "שלוש בבוקר", 4: "ארבע בבוקר", 5: "חמש בבוקר",
-        6: "שש בבוקר", 7: "שבע בבוקר", 8: "שמונה בבוקר", 9: "תשע בבוקר", 10: "עשר בבוקר", 11: "אחת עשרה בבוקר",
-        12: "שתים עשרה בצהריים", 13: "אחת בצהריים", 14: "שתיים בצהריים", 15: "שלוש בצהריים", 16: "ארבע בצהריים",
-        17: "חמש בערב", 18: "שש בערב", 19: "שבע בערב", 20: "שמונה בערב", 21: "תשע בערב", 22: "עשר בערב",
-        23: "אחת עשרה בלילה", 24: "שתיים עשרה בלילה"
+        0: "שתים עשרה`", 1: "אחת", 2: "שתיים ", 3: "שלוש ", 4: "ארבע", 5: "חמש",
+        6: "שש", 7: "שבע", 8: "שמונה", 9: "תשע", 10: "עשר", 11: "אחת עשרה",
+        12: "שתים עשרה", 13: "אחת", 14: "שתיים", 15: "שלוש", 16: "ארבע",
+        17: "חמש", 18: "שש", 19: "שבע", 20: "שמונה", 21: "תשע", 22: "עשר",
+        23: "אחת עשרה`", 24: "שתיים עשרה`"
+    }
+    minute_map = {
+        0: "", 15:"ורבע", 30:"וחצי", 45:"וארבעים וחמש דקות"
     }
     # Parse date and time
     dt = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
     day = day_map[dt.day]
     month = month_map[dt.month]
     hour = hour_map[dt.hour]
+    if 1 < dt.hour < 12:
+        time_of_day = "בבוקר"
+    elif 12 < dt.hour < 18:
+        time_of_day = "בצהריים"
+    elif 18 < dt.hour < 22:
+        time_of_day = "בערב"
+    else:
+        time_of_day = "בלילה"
+    minute = minute_map[dt.minute]  
 
-    return f"{day} ב{month} בשעה {hour}"
+    result = f"{day} ב{month} בשעה {hour} {minute} {time_of_day}"
+    logger.info(f"convert_datetime_to_speech returning: '{result}'")
+    
+    return result
 
 
 @function_tool()

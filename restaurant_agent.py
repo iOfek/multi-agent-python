@@ -37,6 +37,8 @@ from agents.utils import load_prompt
 
 from twilio.rest import Client
 
+from calendar_service import CalendarService
+
 # ---------------------------------------------------------------------------
 # ENV & GLOBALS
 # ---------------------------------------------------------------------------
@@ -618,6 +620,7 @@ class ScheduleMeetingAgent(Agent):
     def __init__(self, supervisor, phone_number: str = None) -> None:
         self.supervisor = supervisor
         self.phone_number = phone_number
+        self.calendar_service = CalendarService()
         super().__init__(
             instructions=(
                 """
@@ -686,48 +689,62 @@ class ScheduleMeetingAgent(Agent):
                 - "הפעל/י את `listLawyerSlots(preference)` בהתאם להעדפה."
                 - "הצג/י 2–3 מועדים זמינים בלבד מהפלט."
                 examples:
-        
+
                 transitions:
-                - next_step: 3_confirm_time_slot
+                - next_step: 3_ask_specific_day
+                    condition: המשתמש לא יכול באותו יום
+                - next_step: 4_confirm_time_slot
                     condition: המשתמש בחר שעה ספציפית
 
-                - id: 3_confirm_time_slot
+                - id: 3_ask_specific_day
+                description: שאל את המשתמש באיזה יום הוא מעדיף
+                instructions:
+                - "חזר/י על ההעדפה,.'"
+                - "הפעל/י את `listLawyerSlotsByDay(day)` בהתאם להעדפה."
+                - "הצג/י 2–3 מועדים זמינים בלבד מהפלט."
+                examples:
+                - "אם הוא לא יכול להגיע ביום שונה, שאל אותו אם הוא יכול להגיע ביום שונה"
+                transitions:
+                - next_step: 5_confirm_time_slot
+                    condition: המשתמש בחר שעה ספציפית
+
+                - id: 5_confirm_time_slot
                 description: אישור סופי מול המשתמש על שעת הפגישה שבחר.
                 instructions:
                 - "אשר/י את הבחירה בשאלה ברורה: 'רק מוודא – אתה רוצה את השעה __ בתאריך __?'"
                 examples:
                 - "רק מוודא – אתה רוצה את 10:00 בבוקר ביום שישי, ה-23.08?"
                 transitions:
-                - next_step: 4_send_confirmation
+                - next_step: 6_send_confirmation
                     condition: המשתמש מאשר
 
-                - id: 4_send_confirmation
+                - id: 6_send_confirmation
                 description: שליחת קישור לאישור הפגישה בוואטסאפ.
                 instructions:
                 - "השתמש/י ב־`sendConfirmation(channel=\"whatsapp\", text=...)`"
-                - "אמר/י ללקוח: 'שלחתי לך קישור לאישור בוואטסאפ, תאשר לי כשסיימת.'"
+                - "אמר/י ללקוח: 'שלחתי לך קישור לאישור בוואטסאפ.'"
                 examples:
-                - "תוך רגע תראה הודעה עם קישור – תאשר לי אחרי שאתה לוחץ עליו."
+                - "תוך רגע תראה הודעה עם קישור לאישור הפגישה."
                 transitions:
-                - next_step: 5_check_confirmation
-                    condition: המשתמש טוען שאישר
+                - next_step: 7_check_confirmation
 
-                - id: 5_check_confirmation
+                - id: 7_check_confirmation
                 description: בדיקה שהפגישה אושרה בהצלחה.
                 instructions:
                 - "הפעל/י את `checkWhatsappConfirmation(...)`"
+                - "עד שהפונקציה חוזרת כל כמה שניות תעדכני מה הססטוס
                 - "אם ההזמנה אושרה – המשך לסיום השיחה."
                 - "אם לא שאל אותו אם הוא צריך עזרה
                 - 
                 examples:
-                - "רק בודקת שהקישור אושר... שנייה."
+                - "רק בודקת שהקישור אושר... כמה רגעים..."
                 transitions:
-                - next_step: 6_end_conversation
+                - next_step: 8_end_conversation
                     condition: התקבל אישור מהמערכת  
-                - next_step: 7_escalate_to_human
-                    condition: התקבל שאלה שלא מובנת
+                - next_step: 9_escalate_to_human
+                    condition: התקבל שאלה שלא מובנת או שארעה תקלה
 
-                - id: 6_end_conversation
+                - id: 8_end_conversation
                 description: סיום אדיב של השיחה לאחר קביעת הפגישה.
                 instructions:
                 - "אמר/י משפט סיום חיובי ומקצועי, לדוגמה: 'נהדר, הפגישה נקבעה. שיהיה לך יום נעים!'"
@@ -774,19 +791,24 @@ class ScheduleMeetingAgent(Agent):
                 # )
                 # voice="coral"
             ),
-            # llm=openai.realtime.RealtimeModel(
-            #     model="gpt-4o-realtime-preview",
-            #     api_key=os.getenv("OPENAI_API_KEY"),
-            #     #  turn_detection=TurnDetection(
-            #     #     type="server_vad",
-            #     #     threshold=0.8,
-            #     #     silence_duration_ms=500,
-            #     #     create_response=True,
-            #     #     interrupt_response=False,
-            #     # )
-            #     # voice="coral"
-            # ),
 
+            # llm=openai.realtime.RealtimeModel(
+                # model="gpt-4o-realtime-preview",
+                # model="gpt-4o-realtime-preview-2024-12-17",
+                # api_key=os.getenv("OPENAI_API_KEY"),
+                #  turn_detection=TurnDetection(
+                #     type="server_vad",
+                #     threshold=0.8,
+                #     silence_duration_ms=500,
+                #     create_response=True,
+                #     interrupt_response=False,
+                # )
+                # voice="coral"
+            # ),
+            # llm=google.beta.realtime.RealtimeModel(
+            #     model="gemini-2.0-flash-live-001",
+            #     api_key=os.getenv("GOOGLE_API_KEY"),
+            # ),
             # llm=openai.LLM.with_azure(
             #     azure_deployment=os.getenv("AZURE_OPENAI_GPT41_DEPLOYMENT"),
             #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT41_ENDPOINT"),
@@ -805,7 +827,8 @@ class ScheduleMeetingAgent(Agent):
         """
         פתיחת השיחה.
         """
-        await self.session.generate_reply()
+        # await self.session.generate_reply()
+        pass
 
     @function_tool()
     async def endConversation(self, context: RunContext):
@@ -820,50 +843,58 @@ class ScheduleMeetingAgent(Agent):
         נקרא כאשר הלקוח בחר זמן ביום נוח לו.
         מחזיר רשימת מועדי פגישה זמינים.
         """
-        # Mock slotId to date/time mapping for demo
-        slot_map = {
-            "morning": [
-                ("123", "23.08.2024", "10:00"),
-                ("456", "23.08.2024", "11:00"),
-            ],
-            "afternoon": [
-                ("789", "24.08.2024", "12:00"),
-                ("101", "24.08.2024", "13:00"),
-            ],
-        }
-        slots = slot_map.get(preference, slot_map["morning"])
-        result = []
-        for slotId, date_str, time_str in slots:
-            spoken = convert_datetime_to_speech(date_str, time_str)
-            result.append({
-                "slotId": slotId,
-                "date": date_str,
-                "time": time_str,
-                "spoken": spoken
-            })
-        return result
-
-   
+        slots = self.calendar_service.get_available_slots(preference)
+        print(slots)
+        return slots
 
     @function_tool()
-    async def sendConfirmation(self, channel: str, date: str):
+    async def listLawyerSlotsByDay(self, day: str, preference: str):
+        """
+        נקרא כאשר הלקוח בחר יום נוח לו.
+        מחזיר רשימת מועדי פגישה זמינים ביום שבחר.
+        """
+        slots = self.calendar_service.get_available_slots_by_day(day, preference)
+        print(slots)
+        return slots
+
+    @function_tool()
+    async def sendConfirmation(self, channel: str, date: str, time: str):
         """
         שולח SMS/WhatsApp/Email.
         """
         # Use the phone number stored in the agent
         phone_number = self.phone_number or "+972527001042"
         
-        # Format the phone number for WhatsApp
-        whatsapp_number = f"whatsapp:{phone_number}"
+        # Ensure phone_number is not None or empty
+        if not phone_number:
+            phone_number = "+972527001042"
         
-        message = client.messages.create(
-            from_='whatsapp:+14155238886',
-            content_sid='HXb5b62575e6e4ff6129ad7c8efe1f983e',
-            content_variables='{"1":"'+date+'","2":"3pm"}',
-            to=whatsapp_number
-        )
-        print(f"📱 WhatsApp confirmation sent to {whatsapp_number} for date: {date}")
-        return "הודעה נשלחה בהצלחה"
+        # Server URL for saving confirmation status
+        server_url = os.getenv("SERVER_URL", "http://localhost:5000")
+        
+        try:
+            # First, save the confirmation status to the server
+            async with aiohttp.ClientSession() as session:
+                url = f"{server_url}/whatsapp/send_confirmation"
+                form_data = aiohttp.FormData()
+                form_data.add_field('phone_number', phone_number)
+                form_data.add_field('date', date)
+                form_data.add_field('time', time)
+                
+                async with session.post(url, data=form_data) as response:
+                    if response.status == 200:
+                        print(f"✅ Confirmation status saved to server for {phone_number}")
+                    else:
+                        print(f"❌ Failed to save confirmation status: {response.status}")
+                        return "שגיאה בשליחת ההודעה"
+            
+            
+            print(f"📱 WhatsApp confirmation sent to {phone_number} for date: {date} and time: {time}")
+            return "הודעה נשלחה בהצלחה"
+            
+        except Exception as e:
+            print(f"❌ Error in sendConfirmation: {e}")
+            return f"שגיאה בשליחת ההודעה: {str(e)}"
     
     @function_tool()
     async def checkWhatsappConfirmation(self, channel: str, text: str):
@@ -872,6 +903,10 @@ class ScheduleMeetingAgent(Agent):
         """
         # Use the phone number stored in the agent
         phone_number = self.phone_number or "+972527001042"
+        
+        # Ensure phone_number is not None or empty
+        if not phone_number:
+            phone_number = "+972527001042"
         
         # Server URL for checking confirmation status
         server_url = os.getenv("SERVER_URL", "http://localhost:5000")
@@ -883,20 +918,21 @@ class ScheduleMeetingAgent(Agent):
         for attempt in range(max_attempts):
             try:
                 async with aiohttp.ClientSession() as session:
-                    url = f"{server_url}/whatsapp-confirmation-status/{phone_number}"
+                    url = f"{server_url}/whatsapp/get_confirmation_tracking_status/{phone_number}"
                     async with session.get(url) as response:
                         if response.status == 200:
                             data = await response.json()
-                            status = data.get("status", {})
-                            
-                            if status.get("confirmed", False):
-                                print(f"✅ WhatsApp confirmation found for {phone_number}")
+                            status = data.get("confirmation_status")
+                            if status == "approved":
+                                print(f"✅ WhatsApp confirmation approved for {phone_number}")
                                 return "ההזמנה אושרה"
-                            elif status.get("confirmed", False) == "false":
-                                print(f"❌ WhatsApp confirmation not found for {phone_number}")
+                            elif status == "declined":
+                                print(f"❌ WhatsApp confirmation declined for {phone_number}")
                                 return "ההזמנה לא אושרה תרצה שנקבע מועד אחר?"
+                            elif status == "pending":
+                                print(f"⏳ Confirmation still pending for {phone_number}, attempt {attempt + 1}/{max_attempts}")
                             else:
-                                print(f"⏳ No confirmation yet for {phone_number}, attempt {attempt + 1}/{max_attempts}")
+                                print(f"❓ Unknown status '{status}' for {phone_number}")
                         else:
                             print(f"❌ Server error: {response.status}")
                             
@@ -911,15 +947,48 @@ class ScheduleMeetingAgent(Agent):
         return "לא התקבל אישור מהמערכת"
     
     @function_tool()
-    async def escalateToHuman(self, reason: str):
+    async def escalateToHuman(self, context: RunContext):
         """
         מעביר את השיחה למספר נציג אנושי.
         """
-        return "מעביר את השיחה למספר נציג אנושי"
+        await context.session.generate_reply(instructions="לצערנו נציגינו עסוקים בפניות אחרות. נציג אנשוי יחזור אליך בהקדם. תודה שדיברת איתנו")
+        await end_call(context)
+        context.session.save_history()
+        return 
 
 # ---------------------------------------------------------------------------
 # JOB ENTRYPOINT – LiveKit worker starts here
-# ---------------------------------------------------------------------------
+# # ---------------------------------------------------------------------------
+# class TranscriberAgent(Agent):
+#     def __init__(self) -> None:
+#         super().__init__(
+#             instructions=(
+#                 """
+#                     You are a transcriber agent ,all you need to do is to transcribe the call.
+#                 """
+#             ),
+#             tools=[],
+#             tts=openai.TTS.with_azure(
+#                 azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_MINI_TTS_DEPLOYMENT"),
+#                 azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_MINI_TTS_ENDPOINT"),
+#                 api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
+#                 api_version="2025-03-01-preview",
+#             ),
+#             llm=openai.LLM.with_azure(
+#                 azure_deployment=os.getenv("AZURE_OPENAI_GPT41_DEPLOYMENT"),
+#                 azure_endpoint=os.getenv("AZURE_OPENAI_GPT41_ENDPOINT"),
+#                 api_key=os.getenv("AZURE_OPENAI_NORTHCENTRALUS_API_KEY"),
+#                 api_version="2025-01-01-preview",
+#             ),
+#             stt=openai.STT.with_azure(
+#                 azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_DEPLOYMENT"),
+#                 azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_ENDPOINT"),
+#                 api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
+#                 api_version="2025-03-01-preview",
+#                 language="en",
+#             ),
+#         )
+
 
 
 async def entrypoint(ctx: JobContext):
@@ -982,13 +1051,13 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         # OPENAI STT LLM TTS
-        stt=openai.STT.with_azure(
-            azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_DEPLOYMENT"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_ENDPOINT"),
-            api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
-            api_version="2025-03-01-preview",
-            language="he",
-        ),
+        # stt=openai.STT.with_azure(
+        #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_DEPLOYMENT"),
+        #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_ENDPOINT"),
+        #     api_key=os.getenv("AZURE_OPENAI_EUS2_API_KEY"),
+        #     api_version="2025-03-01-preview",
+        #     language="he",
+        # ),
         # tts=openai.TTS.with_azure(
         #     instructions=load_prompt("tts_prompt.yaml"),
         #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_MINI_TTS_DEPLOYMENT"),

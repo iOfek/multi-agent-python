@@ -9,3 +9,7 @@ uvicorn~=0.34.0
 twilio~=9.0.0
 python-multipart~=0.0.20
 aiohttp~=3.10
+google-auth-oauthlib~=1.0
+google-auth-httplib2~=0.1
+google-api-python-client~=2.0
+pytz~=2023.3

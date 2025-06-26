@@ -1,8 +1,8 @@
 import random
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Request, HTTPException
-from fastapi.responses import PlainTextResponse
-from pyngrok import ngrok
+from fastapi import FastAPI, Form, Request, HTTPException, Response
+from fastapi.responses import PlainTextResponse, RedirectResponse
+from pyngrok import ngrok,conf
 import os
 import hmac
 import hashlib
@@ -10,11 +10,32 @@ import base64
 import json
 import asyncio
 from datetime import datetime, timedelta
-from livekit import api
-from livekit.agents import JobContext, WorkerOptions
-from livekit.agents.voice import AgentSession
-from livekit.plugins import openai, silero, noise_cancellation
 import logging
+import pickle
+from twilio.rest import Client
+from twilio.http.async_http_client import AsyncTwilioHttpClient
+from agents.types import ConfirmationTracking
+
+
+# Import calendar functionality from the new module
+from calendar_service import (
+    calendar_service, 
+    calendar_oauth, 
+    CALENDAR_USER_ID,
+    get_calendar_service,
+    get_available_slots,
+    load_calendar_token,
+    save_calendar_token
+)
+
+# Import LiveKit functionality from the new module
+from livekit_service import (
+    create_agent_dispatch,
+    add_phone_to_trunk,
+    remove_phone_from_trunk,
+    get_rooms,
+    update_room_metadata
+)
 
 app = FastAPI()
 # CORS(app)  # Disabled CORS for now
@@ -24,37 +45,43 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 load_dotenv()
 
+
+# ---------------------------------------------------------------------------
+# TWILIO CLIENT
+# ---------------------------------------------------------------------------
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+
+# Initialize client as None, will be set up when needed
+client = None
+
+def get_twilio_client():
+    """Get or create the Twilio client with async support"""
+    global client
+    if client is None:
+        if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+            print("⚠️ Warning: Twilio credentials not found. WhatsApp functionality will not work.")
+            print("Please set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN environment variables.")
+            return None
+        else:
+            # Use async HTTP client for async operations
+            async_http_client = AsyncTwilioHttpClient()
+            client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, http_client=async_http_client)
+            print("✅ Twilio async client initialized successfully")
+    return client
+
 # ClickUp webhook secret - you should set this as an environment variable
 CLICKUP_WEBHOOK_SECRET = os.getenv('CLICKUP_WEBHOOK_SECRET', 'your-webhook-secret-here')
 
 # Static ngrok domain - set this as an environment variable
 STATIC_NGROK_DOMAIN = os.getenv('STATIC_NGROK_DOMAIN', 'new-destined-ray.ngrok-free.app')
 
-# LiveKit configuration
-LIVEKIT_URL = os.getenv('LIVEKIT_URL')
-LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY')
-LIVEKIT_API_SECRET = os.getenv('LIVEKIT_API_SECRET')
-
 # Twilio configuration for outbound calls
-TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
 TWILIO_SIP_DOMAIN = os.getenv('TWILIO_SIP_DOMAIN')
 
-# Initialize LiveKit API
-lkapi = None
-
-# In-memory storage for WhatsApp confirmations
+# In-memory storage for confirmation tracking
 # In production, use a proper database like Redis or PostgreSQL
-whatsapp_confirmations = {}
-
-def get_livekit_api():
-    """Get or create LiveKit API instance"""
-    lkapi = api.LiveKitAPI(
-        url=LIVEKIT_URL,
-        api_key=LIVEKIT_API_KEY,
-        api_secret=LIVEKIT_API_SECRET
-    )
-    return lkapi
+confirmation_tracking = {}
 
 def verify_clickup_signature(request_body, signature):
     """
@@ -81,49 +108,6 @@ def extract_phone_from_whatsapp_number(whatsapp_number: str) -> str:
     if whatsapp_number.startswith('whatsapp:'):
         return whatsapp_number[9:]  # Remove 'whatsapp:' prefix
     return whatsapp_number
-
-def store_confirmation(phone_number: str, meeting_details: str = ""):
-    """
-    Store confirmation for a phone number
-    """
-    whatsapp_confirmations[phone_number] = {
-        "confirmed": True,
-        "confirmed_at": datetime.now().isoformat(),
-        "meeting_details": meeting_details
-    }
-    print(f"✅ Stored confirmation for {phone_number}: {whatsapp_confirmations[phone_number]}")
-
-def get_confirmation_status(phone_number: str) -> dict:
-    """
-    Get confirmation status for a phone number
-    """
-    confirmation = whatsapp_confirmations.get(phone_number)
-    if confirmation:
-        return {
-            "confirmed": confirmation["confirmed"],
-            "confirmed_at": confirmation["confirmed_at"],
-            "meeting_details": confirmation.get("meeting_details", "")
-        }
-    return {"confirmed": False, "confirmed_at": None, "meeting_details": ""}
-
-def set_confirmation_status(phone_number: str, status: str):
-    """
-    Set confirmation status for a phone number
-    """
-    whatsapp_confirmations[phone_number] = {
-        "confirmed": status,
-        "confirmed_at": datetime.now().isoformat(),
-        "meeting_details": ""
-    }
-    print(f"✅ Set confirmation status for {phone_number}: {whatsapp_confirmations[phone_number]}")
-
-def clear_confirmation(phone_number: str):
-    """
-    Clear confirmation for a phone number (useful for testing)
-    """
-    if phone_number in whatsapp_confirmations:
-        del whatsapp_confirmations[phone_number]
-        print(f"🗑️ Cleared confirmation for {phone_number}")
 
 @app.post('/clickup-webhook')
 async def clickup_webhook(request: Request):
@@ -157,19 +141,12 @@ async def clickup_webhook(request: Request):
             
             if phone_number:
                 if await add_phone_to_trunk(phone_number):
-                    # Make outbound call asynchronously - now we can use await directly!
-                    livekit_api = get_livekit_api()
-                    if livekit_api:
-                        await livekit_api.agent_dispatch.create_dispatch(
-                            api.CreateAgentDispatchRequest(
-                                agent_name="my-telephony-agent", 
-                                room=f"outbound-{''.join(str(random.randint(0, 9)) for _ in range(10))}",
-                                metadata=f'{{"phone_number": "{phone_number}"}}'
-                            )
-                        )
+                    # Make outbound call using the new LiveKit service
+                    if await create_agent_dispatch(phone_number):
+                        print(f"✅ Successfully created agent dispatch for {phone_number}")
                     else:
-                        print("LiveKit API not configured")
-                        raise HTTPException(status_code=400, detail="LiveKit API not configured")
+                        print("Failed to create agent dispatch")
+                        raise HTTPException(status_code=400, detail="Failed to create agent dispatch")
                 else:
                     print("Failed to add phone number to trunk")
                     raise HTTPException(status_code=400, detail="Failed to add phone number to trunk")
@@ -205,136 +182,58 @@ async def health_check():
     """Health check endpoint for monitoring"""
     return {"status": "healthy", "service": "clickup-webhook-server"}
 
-@app.get('/whatsapp-confirmation-status/{phone_number}')
-async def get_whatsapp_confirmation_status(phone_number: str):
-    """
-    Check WhatsApp confirmation status for a phone number
-    """
-    status = get_confirmation_status(phone_number)
-    return {
-        "phone_number": phone_number,
-        "status": status
-    }
 
-@app.get('/whatsapp-confirmation-status/{phone_number}/{status}')
-async def update_whatsapp_confirmation_status(phone_number: str, status: str):
+@app.get('/oauth2callback')
+async def oauth2callback(code: str = None, state: str = None, error: str = None):
     """
-    Check WhatsApp confirmation status for a phone number
+    OAuth2 callback endpoint for Google Calendar authorization
     """
-    status = set_confirmation_status(phone_number, status)
-    return {
-        "phone_number": phone_number,
-        "status": status
-    }
-
-@app.get('/clear-whatsapp-confirmation/{phone_number}')
-async def clear_whatsapp_confirmation(phone_number: str):
-    """
-    Clear WhatsApp confirmation for a phone number (for testing)
-    """
-    clear_confirmation(phone_number)
-    return {"status": "success", "message": f"Confirmation cleared for {phone_number}"}
-
-@app.get('/whatsapp-confirmations')
-async def list_whatsapp_confirmations():
-    """
-    List all WhatsApp confirmations (for debugging)
-    """
-    return {
-        "confirmations": whatsapp_confirmations,
-        "count": len(whatsapp_confirmations)
-    }
-
-async def add_phone_to_trunk(phone_number: str):
-    """
-    Add a phone number to the SIP inbound trunk's allowed numbers
-    """
-    livekit_api = get_livekit_api()
-    print(livekit_api)
+    if error:
+        return {"error": f"OAuth error: {error}"}
     
     try:
-        rules = await livekit_api.sip.list_sip_inbound_trunk(
-            api.ListSIPInboundTrunkRequest()
-        )
-        print(f"Raw rules object: {type(rules)}")
-        print(f"Rules content: {rules}")
-
-        # find the trunk with the id ST_QVWyiWtMs2Mu
-        org_trunk = next((trunk for trunk in rules.items if trunk.sip_trunk_id == os.getenv("SIP_INBOUND_TRUNK_ID")), None)
-        if org_trunk:
-            if phone_number not in org_trunk.allowed_numbers:
-                org_trunk.allowed_numbers.append(phone_number)
-            else:
-                print(f"Phone number {phone_number} already in allowed numbers")
-                return org_trunk
-        else:
-            print(f"Trunk with id {os.getenv('SIP_INBOUND_TRUNK_ID')} not found")
-            return {
-                "status": "error",
-                "message": "Trunk not found"
-            }
-        
-        trunk = await livekit_api.sip.update_sip_inbound_trunk(
-            trunk_id = os.getenv("SIP_INBOUND_TRUNK_ID"),
-            trunk = org_trunk
-        )
-        # print(f"Successfully updated trunk {trunk}")        
-
-        
-        return trunk
-        
+        result = calendar_oauth.handle_callback(code)
+        return result
     except Exception as e:
-        print(f"Error in add_phone_to_trunk: {e}")
-        None
-    finally:
-        if livekit_api:
-            await livekit_api.aclose()
+        logger.error(f"OAuth callback error: {e}")
+        return {"error": f"Failed to complete OAuth: {str(e)}"}
 
-async def remove_phone_from_trunk(phone_number: str):
+@app.get('/calendar/authorize')
+async def authorize_calendar():
     """
-    Remove a phone number from the SIP inbound trunk's allowed numbers
+    Start OAuth2 flow for calendar authorization
     """
-    livekit_api = get_livekit_api()
-    print(livekit_api)
-    
     try:
-        rules = await livekit_api.sip.list_sip_inbound_trunk(
-            api.ListSIPInboundTrunkRequest()
-        )
-        print(f"Raw rules object: {type(rules)}")
-        print(f"Rules content: {rules}")
+        authorization_url = calendar_oauth.get_authorization_url()
+        return RedirectResponse(url=authorization_url)
+    except Exception as e:
+        logger.error(f"Authorization error: {e}")
+        raise HTTPException(status_code=500, detail=f"Authorization failed: {str(e)}")
 
-        # find the trunk with the id ST_QVWyiWtMs2Mu
-        org_trunk = next((trunk for trunk in rules.items if trunk.sip_trunk_id == os.getenv("SIP_INBOUND_TRUNK_ID","ST_QVWyiWtMs2Mu")), None)
-        if org_trunk:
-            if phone_number in org_trunk.allowed_numbers:
-                org_trunk.allowed_numbers.remove(phone_number)
-                print(f"Trunk: {org_trunk}")
-            else:
-                print(f"Phone number {phone_number} not found in allowed numbers")
-                return None
-        else:
-            print(f"Trunk with id {os.getenv('SIP_INBOUND_TRUNK_ID')} not found")
-            return None
+@app.get('/calendar/availability')
+async def get_calendar_availability(preference: str):
+    """
+    Get available calendar slots
+    """
+    try:
+        # Get available slots
+        slots = calendar_service.get_available_slots(preference)
         
-        trunk = await livekit_api.sip.update_sip_inbound_trunk(
-            trunk_id = os.getenv("SIP_INBOUND_TRUNK_ID"),
-            trunk = org_trunk
-        )
-        print(f"Successfully updated trunk {trunk}")        
-
-        return trunk
+        return {
+            "user_id": CALENDAR_USER_ID,
+            "preference": preference,
+            "available_slots": slots,
+            "count": len(slots)
+        }
         
     except Exception as e:
-        print(f"Error in remove_phone_from_trunk: {e}")
-        return None
-    finally:
-        if livekit_api:
-            await livekit_api.aclose()
+        logger.error(f"Calendar availability error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get availability: {str(e)}")
+
 
 @app.get('/livekit-remove-phone')
 async def livekit_remove_phone(request: Request):
-    """Health check endpoint for monitoring"""
+    """Remove phone number from LiveKit trunk"""
     if await remove_phone_from_trunk("+972527001042"):
         return {"status": "success"}
     else:
@@ -342,30 +241,135 @@ async def livekit_remove_phone(request: Request):
 
 @app.get('/livekit-add-phone')
 async def livekit_add_phone(request: Request):
-    """Health check endpoint for monitoring"""
+    """Add phone number to LiveKit trunk"""
     if await add_phone_to_trunk("+972505536704"):
         return {"status": "success"}
     else:
         return {"status": "error"}
-    
 
-@app.get('/livekit-get-rooms')
-async def livekit_get_rooms(request: Request):
-    """Health check endpoint for monitoring"""
-    livekit_api = get_livekit_api()
-    rooms = await livekit_api.room.list_rooms(api.ListRoomsRequest()).rooms
-    print('rooms', rooms)
-    room = next((room for room in rooms if "+972527001042" in room.name), None)
-    print('room', room)
-    if room:
-        await livekit_api.room.update_room_metadata(api.UpdateRoomMetadataRequest(room=room.name, metadata=f'{{"confirmed": "true"}}'))
-        print('room updated')
-    else:
-        print('room not found')
-    await livekit_api.aclose()
-    return {"status": "success"}
+
+
+
+async def send_whatsapp_confirmation(phone_number: str, date: str, time: str):
+    """
+    Send confirmation to WhatsApp
+    """
+    twilio_client = get_twilio_client()
+    if twilio_client is None:
+        raise Exception("Twilio client not initialized. Please check your TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN environment variables.")
     
+    whatsapp_number = f"whatsapp:{phone_number}"
+    message = await twilio_client.messages.create_async(
+        from_='whatsapp:+14155238886',
+        content_sid='HXb5b62575e6e4ff6129ad7c8efe1f983e',
+        content_variables='{"1":"'+date+'","2":"'+time+'"}',
+        to=whatsapp_number
+    )
+    return message
+
+async def send_whatsapp_meeting_link(phone_number: str, meeting_link: str):
+    """
+    Send confirmation to WhatsApp
+    """
+    twilio_client = get_twilio_client()
+    if twilio_client is None:
+        raise Exception("Twilio client not initialized. Please check your TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN environment variables.")
     
+    whatsapp_number = f"whatsapp:{phone_number}"
+    message = await twilio_client.messages.create_async(
+        from_='whatsapp:+14155238886',
+        content_sid='HXb5b62575e6e4ff6129ad7c8efe1f983e',
+        content_variables='{"1":"'+meeting_link+'","2":""}',
+        to=whatsapp_number
+    )
+    return message
+
+async def get_confirmation_tracking_status(phone_number: str) -> ConfirmationTracking:
+    """
+    Get confirmation tracking
+    """
+    return confirmation_tracking.get(phone_number, {})
+
+async def set_confirmation_tracking(phone_number: str, date: str | None = None, time: str | None = None, status: str | None = None, sent_at: str | None = None, answered_at: str | None = None) -> ConfirmationTracking:
+    """
+    Set confirmation tracking
+    """
+    # Get existing tracking data or create new tracking object
+    existing_data = confirmation_tracking.get(phone_number, {})
+    tracking = ConfirmationTracking.from_dict(phone_number, existing_data)
+    
+    # Update only the fields that are provided
+    if status:
+        tracking.status = status
+    if sent_at:
+        tracking.sent_at = sent_at 
+    if answered_at:
+        tracking.answered_at = answered_at
+    if date:
+        tracking.date = date
+    if time:
+        tracking.time = time
+
+    # Store the updated data
+    confirmation_tracking[phone_number] = tracking.to_dict()
+
+    print(f"📱 WhatsApp confirmation tracking set for {phone_number} for date: {date} and time: {time}")
+    return tracking
+
+@app.get('/whatsapp/get_confirmation_tracking_status/{phone_number}')
+async def get_confirmation_tracking_status_endpoint(phone_number: str):
+    """
+    Get confirmation tracking status
+    """
+    # return as json 
+    confirmation_status = await get_confirmation_tracking_status(phone_number)
+    return {"status": "success", "confirmation_status": confirmation_status.status}
+
+@app.post('/whatsapp/send_confirmation')
+async def send_confirmation(request: Request):
+    """
+    Send confirmation to WhatsApp
+    """
+    try:
+        form_data = await request.form()
+        phone_number = form_data.get('phone_number', '')
+        date = form_data.get('date', '')
+        time = form_data.get('time', '')
+        
+        print(f"📱 Received confirmation request for {phone_number} on {date} at {time}")
+        
+        # Validate required fields
+        if not phone_number or not date or not time:
+            logger.error(f"Missing required fields: phone_number={phone_number}, date={date}, time={time}")
+            raise HTTPException(status_code=400, detail="Missing required fields: phone_number, date, time")
+        
+        # Send WhatsApp confirmation
+        try:
+            await send_whatsapp_confirmation(phone_number, date, time)
+            print(f"✅ WhatsApp confirmation sent successfully to {phone_number}")
+        except Exception as e:
+            logger.error(f"Failed to send WhatsApp confirmation: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to send WhatsApp confirmation: {str(e)}")
+        
+        # Set confirmation tracking
+        try:
+            await set_confirmation_tracking(phone_number, date, time, "pending", datetime.now().isoformat(), None)
+            print(f"✅ Confirmation tracking set for {phone_number}")
+        except Exception as e:
+            logger.error(f"Failed to set confirmation tracking: {e}")
+            # Don't fail the entire request if tracking fails
+            print(f"⚠️ Warning: Failed to set confirmation tracking: {e}")
+
+        print(f"📱 WhatsApp confirmation sent to {phone_number} for date: {date} and time: {time}")
+        return {"status": "success"}
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in send_confirmation: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 
 @app.post("/whatsapp-webhook")
@@ -381,67 +385,56 @@ async def whatsapp_webhook(request: Request):
     # Extract fields with fallbacks
     From = form_data.get('From', '')
     Body = form_data.get('Body', '')
-    ButtonText = form_data.get('ButtonText', '')
-    ButtonPayload = form_data.get('ButtonPayload', '')
-    InteractiveType = form_data.get('InteractiveType', '')
-    InteractiveButtonReply = form_data.get('InteractiveButtonReply', '')
-    InteractiveListReply = form_data.get('InteractiveListReply', '')
+    button_payload = form_data.get('ButtonPayload', '')
     
-    # Also check for other possible field names
-    MessageType = form_data.get('MessageType', '')
-    Type = form_data.get('Type', '')
     
     print("📞 From:", From)
     print("💬 Body:", Body)
-    print("🔘 ButtonPayload:", ButtonPayload)
-    print("🔘 ButtonText:", ButtonText)
-    print("🔘 InteractiveType:", InteractiveType)
-    print("🔘 InteractiveButtonReply:", InteractiveButtonReply)
-    print("🔘 InteractiveListReply:", InteractiveListReply)
-    print("🔘 MessageType:", MessageType)
-    print("🔘 Type:", Type)
+
 
     # Extract phone number from WhatsApp number
     phone_number = extract_phone_from_whatsapp_number(From)
     print(f"📱 Extracted phone number: {phone_number}")
 
-    # Check for button interactions - try multiple approaches
-    button_payload = None
-    
-    # Method 1: Direct button payload
-    if ButtonPayload:
-        button_payload = ButtonPayload
-        print("✅ Found button payload via ButtonPayload field")
-    
-    # Method 2: Interactive button reply
-    elif InteractiveType == "button_reply" and InteractiveButtonReply:
-        button_payload = InteractiveButtonReply
-        print("✅ Found button payload via InteractiveButtonReply field")
-    
-    # Method 3: Check if it's an interactive message
-    elif InteractiveType or Type == "interactive":
-        # Try to parse the Body as JSON if it contains interactive data
-        try:
-            import json
-            body_data = json.loads(Body)
-            if 'button_reply' in body_data:
-                button_payload = body_data['button_reply'].get('id', '')
-                print("✅ Found button payload in JSON body")
-        except:
-            pass
-    
+
     if button_payload:
         print("✅ Button clicked:", button_payload)
-        if button_payload == "CONFIRM_MEETING":
+        if button_payload == "confirmation1234":
             # Store confirmation for this phone number
-            store_confirmation(phone_number, "Meeting confirmed via WhatsApp")
             print("✅ Confirm meeting button clicked - confirmation stored")
-            # Add your calendar creation logic here
-            pass
-        elif button_payload == "DECLINE_MEETING":
+            
+         
+                
+            # Book the calendar slot
+            try:
+                confirmation_tracking = await get_confirmation_tracking_status(phone_number)
+                # Create a slot ID from date and time (you may need to adjust this based on your calendar service)
+                print(f"📱 Confirmation tracking: {confirmation_tracking}")
+                booking_result = calendar_service.book_slot(confirmation_tracking.date, confirmation_tracking.time, phone_number)
+                print(f"✅ Calendar booking result: {booking_result}")
+                
+                # Extract meet link from the booking result
+                meet_link = booking_result.get('meet_link')
+                if not meet_link:
+                    raise Exception("No meet link generated from calendar booking")
+                
+                await send_whatsapp_meeting_link(phone_number, meet_link)
+
+                await set_confirmation_tracking(phone_number, status="approved", answered_at=datetime.now().isoformat())
+                # Update confirmation tracking status
+                print(f"📱 Confirmation tracking: {confirmation_tracking}")
+
+
+
+            except Exception as e:
+                print(f"❌ Error booking calendar: {e}")
+                # Continue anyway - the confirmation is still valid
+            
+        elif button_payload == "cancellation1234":
             # Handle rejection flow
             print("❌ Decline meeting button clicked")
-            pass
+            await set_confirmation_tracking(phone_number, status="declined", answered_at=datetime.now().isoformat())
+            
     else:
         print("💬 Text reply or no button detected:", Body)
 
@@ -453,6 +446,8 @@ if __name__ == '__main__':
     port = 5000
     
     # Start ngrok tunnel with static domain
+    conf.get_default().ngrok_path = "C:\\ProgramData\\chocolatey\\bin\\ngrok.exe"  # Use system-installed binary
+
     public_url = ngrok.connect(port, domain=STATIC_NGROK_DOMAIN)
     print(f"Ngrok tunnel established at: {public_url}")
     print(f"Your webhook URL is: {public_url}/clickup-webhook")
