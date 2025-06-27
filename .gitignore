@@ -3,3 +3,11 @@ venv/
 .DS_Store
 .env
 agents/__pycache__/
+
+# Python bytecode files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.py[cod]
+*$py.class

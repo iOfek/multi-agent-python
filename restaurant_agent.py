@@ -33,11 +33,13 @@ from agents.process_explanation import ProcessExplanation
 from agents.psyche_specialist import PsycheSpecialist
 from agents.other_specialist import OtherSpecialist
 from agents.specialist import Specialist
+from agents.types import PhoneStatus
 from agents.utils import load_prompt
 
 from twilio.rest import Client
 
 from calendar_service import CalendarService
+from leadconnector_service import append_to_transcript, update_leadconnector_contact
 
 # ---------------------------------------------------------------------------
 # ENV & GLOBALS
@@ -46,6 +48,58 @@ logger = logging.getLogger("restaurant-example")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
+def format_transcript_readable(session_history):
+    """
+    Convert session history to a readable format with date at the top.
+    
+    Args:
+        session_history: The session history object with to_dict() method
+        
+    Returns:
+        str: Formatted transcript as a readable string
+    """
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Get the history as a dictionary
+    history_dict = session_history.to_dict()
+    
+    # Start with the date header
+    formatted_transcript = f"=== TRANSCRIPT ===\n"
+    formatted_transcript += f"Date: {current_date}\n"
+    formatted_transcript += f"{'='*50}\n\n"
+    
+    # Process each item in the history
+    for item in history_dict.get('items', []):
+        item_id = item.get('id', '')
+        item_type = item.get('type', '')
+        role = item.get('role', '')
+        content = item.get('content', [])
+        interrupted = item.get('interrupted', False)
+        
+        # Format the role for display
+        if role == 'assistant':
+            speaker = "AGENT"
+        elif role == 'user':
+            speaker = "USER"
+        else:
+            speaker = role.upper()
+        
+        # Add speaker and timestamp
+        formatted_transcript += f"[{speaker}] "
+        if interrupted:
+            formatted_transcript += "(INTERRUPTED) "
+        
+        # Add content
+        if isinstance(content, list):
+            # Join multiple content items
+            content_text = " ".join(str(c) for c in content)
+        else:
+            content_text = str(content)
+        
+        formatted_transcript += f"{content_text}\n\n"
+    
+    return formatted_transcript
 
 # ---------------------------------------------------------------------------
 # TWILIO CLIENT
@@ -617,9 +671,10 @@ class ScheduleMeetingAgent(Agent):
     isEligible = True  # If you want this as a class variable
     """Realtime agent that schedules meetings with the lawyer."""
 
-    def __init__(self, supervisor, phone_number: str = None) -> None:
+    def __init__(self, supervisor, phone_number: str = None, contact_id: str = None) -> None:
         self.supervisor = supervisor
         self.phone_number = phone_number
+        self.contact_id = contact_id
         self.calendar_service = CalendarService()
         super().__init__(
             instructions=(
@@ -953,6 +1008,7 @@ class ScheduleMeetingAgent(Agent):
         """
         await context.session.generate_reply(instructions="לצערנו נציגינו עסוקים בפניות אחרות. נציג אנשוי יחזור אליך בהקדם. תודה שדיברת איתנו")
         await end_call(context)
+        await update_leadconnector_contact(self.contact_id, {"phone_status": PhoneStatus.ESCALATED_TO_HUMAN})
         context.session.save_history()
         return 
 
@@ -1004,17 +1060,25 @@ async def entrypoint(ctx: JobContext):
 
         # Add the following code to the top, before calling ctx.connect()
     
-    async def write_transcript():
+    async def write_transcript( ):
         current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # Use tempfile.gettempdir() for cross-platform compatibility
         temp_dir = tempfile.gettempdir()
-        filename = os.path.join(temp_dir, f"transcript_{ctx.room.name}_{current_date}.json")
+        json_filename = os.path.join(temp_dir, f"transcript_{ctx.room.name}_{current_date}.json")
+        readable_filename = os.path.join(temp_dir, f"transcript_{ctx.room.name}_{current_date}.txt")
         
-        with open(filename, 'w') as f:
-            json.dump(session.history.to_dict(), f, indent=2)
-            
-        print(f"Transcript for {ctx.room.name} saved to {filename}")
+        # Save JSON version
+        with open(json_filename, 'w') as f:
+            S = json.dump(session.history.to_dict(), f, indent=2)
+        
+        # Save readable version
+        readable_transcript = format_transcript_readable(session.history)
+        with open(readable_filename, 'w', encoding='utf-8') as f:
+            f.write(readable_transcript)
+        
+        await append_to_transcript(contact_id, S)
+        print(f"Transcript for {ctx.room.name} saved to {json_filename} and {readable_filename}")
 
     ctx.add_shutdown_callback(write_transcript)
 
@@ -1083,14 +1147,15 @@ async def entrypoint(ctx: JobContext):
         if ctx.job.metadata and ctx.job.metadata.strip():
             dial_info = json.loads(ctx.job.metadata)
             phone_number = dial_info.get("phone_number")
+            contact_id = dial_info.get("contact_id")
     except (json.JSONDecodeError, AttributeError) as e:
         logger.warning(f"Failed to parse job metadata: {e}")
         phone_number = None
-
+        contact_id = None
     # The participant's identity can be anything you want, but this example uses the phone number itself
     sip_participant_identity = "+97233763938"
     
-    agent = ScheduleMeetingAgent(supervisor, phone_number)
+    agent = ScheduleMeetingAgent(supervisor, phone_number, contact_id)
 
     # start the session first before dialing, to ensure that when the user picks up
     # the agent does not miss anything the user says
@@ -1109,7 +1174,7 @@ async def entrypoint(ctx: JobContext):
     if phone_number is not None:
         # The outbound call will be placed after this method is executed
         try:
-            print(f"Creating SIP participant for phone number: {phone_number}")
+            print(f"Creating SIP participant for phone number: {phone_number} and contact_id: {contact_id}")
             await ctx.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
                 # This ensures the participant joins the correct room
                 room_name=ctx.room.name,
@@ -1130,6 +1195,8 @@ async def entrypoint(ctx: JobContext):
             # wait for the agent session start and participant join
             participant = await ctx.wait_for_participant(identity=sip_participant_identity)
             logger.info(f"participant joined: {participant.identity}")
+            
+            await update_leadconnector_contact(contact_id, {"phone_status": PhoneStatus.ANSWERED})
 
             agent.set_participant(participant)
 
@@ -1138,6 +1205,8 @@ async def entrypoint(ctx: JobContext):
             print(f"error creating SIP participant: {e.message}, "
                   f"SIP status: {e.metadata.get('sip_status_code')} "
                   f"{e.metadata.get('sip_status')}")
+            await update_leadconnector_contact(contact_id, {"phone_status": PhoneStatus.NOT_ANSWERED})
+            
             ctx.shutdown()
     print("session_started", session_started)
     await session_started

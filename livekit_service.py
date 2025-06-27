@@ -5,6 +5,8 @@ from livekit.agents import JobContext, WorkerOptions
 from livekit.agents.voice import AgentSession
 from livekit.plugins import openai, silero, noise_cancellation
 
+from agents.types import LeadConnectorContact
+
 # LiveKit configuration
 LIVEKIT_URL = os.getenv('LIVEKIT_URL')
 LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY')
@@ -19,7 +21,7 @@ def get_livekit_api():
     )
     return lkapi
 
-async def create_agent_dispatch(phone_number: str):
+async def create_agent_dispatch(contact: LeadConnectorContact):
     """Create a LiveKit agent dispatch for outbound calls"""
     livekit_api = get_livekit_api()
     if livekit_api:
@@ -28,7 +30,7 @@ async def create_agent_dispatch(phone_number: str):
                 api.CreateAgentDispatchRequest(
                     agent_name="my-telephony-agent", 
                     room=f"outbound-{''.join(str(random.randint(0, 9)) for _ in range(10))}",
-                    metadata=f'{{"phone_number": "{phone_number}"}}'
+                    metadata=f'{{"phone_number": "{contact.phone}", "contact_id": "{contact.contact_id}"}}'
                 )
             )
             return True

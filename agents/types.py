@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Annotated, Optional, List
 import yaml
 
@@ -48,7 +49,63 @@ class UserData:
             "has_medical_documentation": self.has_medical_documentation or False,
         }
         # summarize in yaml performs better than json
-        return yaml.dump(data) 
+        return yaml.dump(data)
+
+
+@dataclass
+class PhoneStatus(Enum):
+    """Enum for different phone call statuses"""
+    ANSWERED = "Answered"
+    NOT_ANSWERED = "Not Answered"
+    NOT_AVAILABLE_TO_TALK = "Not available to talk"
+    ESCALATED_TO_HUMAN = "Escalated to human"
+    ERROR = "Error"
+    NOT_ELIGIBLE_SET_APPOINTMENT = "Not Eligible set Appointment"
+    NOT_ELIGIBLE_NO_APPOINTMENT = "Not Eligible no appointment"
+    ELIGIBLE_NO_APPOINTMENT = "Eligible no appointment"
+    ELIGIBLE_SET_APPOINTMENT = "Eligible set appointment"
+
+@dataclass
+class LeadConnectorContact:
+    """Contact data structure from LeadConnector CRM system"""
+    # Basic contact information
+    contact_id: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    
+    # Contact metadata
+    tags: Optional[str] = None
+    country: Optional[str] = None
+    date_created: Optional[str] = None
+    
+    # Eligibility and qualification fields
+    is_student_or_registered: Optional[str] = None  # "האם אתה סטודנט או נרשמת ללימודים"
+    diagnoses: Optional[str] = None  # "איזה אבחנות"
+    has_diagnoses: Optional[str] = None  # "אבחונים"
+    medical_problems_description: Optional[str] = None  # "תיאור בעיות רפואיות"
+    disability_percentage: Optional[str] = None  # "האם נקבעו אחוזי נכות"
+    
+    # Call management fields
+    next_call_time: Optional[str] = None  # "Next Call Time"
+    phone_status: Optional[PhoneStatus] = None  # "Phone Status"
+    transcript: Optional[str] = None  # "Transcript"
+    
+    def __init__(self, **kwargs):
+        """Initialize the dataclass, ignoring any fields not defined in the class"""
+        # Get all the field names defined in this dataclass
+        import dataclasses
+        field_names = {field.name for field in dataclasses.fields(self.__class__)}
+        
+        # Filter kwargs to only include defined fields
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in field_names}
+        
+        # Initialize the dataclass with filtered kwargs
+        for field_name, value in filtered_kwargs.items():
+            setattr(self, field_name, value)
+
 
 @dataclass
 class ConfirmationTracking:

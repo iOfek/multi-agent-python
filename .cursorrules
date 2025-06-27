@@ -1,0 +1,28 @@
+# Cursor Rules for this project
+
+## Dataclass Guidelines
+- NEVER add custom `to_dict()` or `from_dict()` methods to dataclasses unless absolutely necessary
+- Use built-in dataclass methods instead:
+  - `dataclasses.asdict(obj)` for converting to dict
+  - `dataclass(**dict_data)` for creating from dict
+- Only add custom serialization methods if you need:
+  - Hebrew field name mapping
+  - Custom validation logic
+  - API compatibility with specific field names
+  - Complex nested object handling
+
+## Testing Guidelines
+- NEVER add tests unless explicitly requested by the user
+- Do not create test files, test functions, or testing infrastructure
+- Focus on implementing the requested functionality only
+
+## Documentation Guidelines
+- NEVER modify the README.md file unless explicitly requested by the user
+- Do not add, remove, or change documentation without specific instructions
+- Keep documentation changes minimal and only when directly asked
+
+## Code Style
+- Prefer built-in Python functionality over custom implementations
+- Keep dataclasses simple and focused on data structure
+- Use type hints consistently
+- Add docstrings for complex classes and methods 

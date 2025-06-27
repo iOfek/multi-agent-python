@@ -14,7 +14,7 @@ import logging
 import pickle
 from twilio.rest import Client
 from twilio.http.async_http_client import AsyncTwilioHttpClient
-from agents.types import ConfirmationTracking
+from agents.types import ConfirmationTracking, LeadConnectorContact
 
 
 # Import calendar functionality from the new module
@@ -35,6 +35,14 @@ from livekit_service import (
     remove_phone_from_trunk,
     get_rooms,
     update_room_metadata
+)
+
+# Import LeadConnector functionality
+from leadconnector_service import (
+    leadconnector_service,
+    update_leadconnector_contact,
+    get_leadconnector_contact,
+    create_leadconnector_contact
 )
 
 app = FastAPI()
@@ -132,27 +140,29 @@ async def clickup_webhook(request: Request):
         # Process the data based on the 'event' field
         event = data.get('event')
         
-        if True:  # if event == 'taskCreated':
-            task_id = data.get('task_id')
-            print(f"New task created: {task_id}")
-            
-            # Extract phone number from task data
-            phone_number = extract_phone_number_from_task(data)
-            
-            if phone_number:
-                if await add_phone_to_trunk(phone_number):
-                    # Make outbound call using the new LiveKit service
-                    if await create_agent_dispatch(phone_number):
-                        print(f"✅ Successfully created agent dispatch for {phone_number}")
-                    else:
-                        print("Failed to create agent dispatch")
-                        raise HTTPException(status_code=400, detail="Failed to create agent dispatch")
+
+        # Create LeadConnectorContact from the webhook data
+        contact_data = LeadConnectorContact(**data)
+        print(f"Contact data: {contact_data}")
+        
+        # Extract phone number from the LeadConnectorContact
+        phone_number = contact_data.phone
+        
+        if phone_number:
+            # Add phone to LiveKit trunk
+            if await add_phone_to_trunk(phone_number):
+                # Make outbound call using the new LiveKit service
+                if await create_agent_dispatch(contact_data):
+                    print(f"✅ Successfully created agent dispatch for {phone_number}")
                 else:
-                    print("Failed to add phone number to trunk")
-                    raise HTTPException(status_code=400, detail="Failed to add phone number to trunk")
+                    print("Failed to create agent dispatch")
+                    raise HTTPException(status_code=400, detail="Failed to create agent dispatch")
             else:
-                print("No phone number found in task data")
-                raise HTTPException(status_code=400, detail="No phone number found in task data")
+                print("Failed to add phone number to trunk")
+                raise HTTPException(status_code=400, detail="Failed to add phone number to trunk")
+        else:
+            print("No phone number found in LeadConnectorContact")
+            raise HTTPException(status_code=400, detail="No phone number found in LeadConnectorContact")
 
         return {"status": "success"}
     except Exception as e:
