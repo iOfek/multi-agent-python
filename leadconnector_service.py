@@ -407,7 +407,8 @@ async def get_transcript(contact_id: str) -> Dict[str, Any]:
             }
         
         contact_data = contact_result.get("data", {})
-        custom_fields = contact_data.get("customField", [])
+        contact = contact_data.get("contact", {})
+        custom_fields = contact.get("customField", [])
         
         # Find the transcript field with the specific ID
         transcript_field = None
@@ -428,7 +429,7 @@ async def get_transcript(contact_id: str) -> Dict[str, Any]:
             logger.warning(f"No transcript field found for contact {contact_id}")
             return {
                 "success": False,
-                "error": "Transcript field not found",
+                "error": "Transcript field not found, contact_result: " + str(contact_result),
                 "contact_id": contact_id
             }
             
@@ -473,21 +474,22 @@ async def append_to_transcript(contact_id: str, new_text: str) -> Dict[str, Any]
         else:
             current_transcript = transcript_result.get("transcript", "")
         
+        logger.info(f"transcript_result: {transcript_result}")
         # Append the new text
         updated_transcript = current_transcript + "\n" + new_text if current_transcript else new_text
         
         # Prepare contact data with updated transcript
-        contact_data = {
-            "customField": [
-                {
-                    "id": "o1cxgUyX4rbPUkJGLM5f",
-                    "value": updated_transcript
-                }
-            ]
-        }
+        # ` contact_data = {
+        #         "customField": [
+        #             {
+        #                 "id": "o1cxgUyX4rbPUkJGLM5f",
+        #                 "value": updated_transcript
+        #             }
+        #         ]
+        #     }`
         
         # Update the contact
-        update_result = await update_leadconnector_contact(contact_id, contact_data)
+        update_result = await update_leadconnector_contact(contact_id, {"transcript": updated_transcript})
         
         if update_result.get("success"):
             logger.info(f"Successfully appended to transcript for contact {contact_id}")

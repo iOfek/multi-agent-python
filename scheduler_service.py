@@ -37,7 +37,7 @@ class CallScheduler:
             self.is_running = True
             logger.info("Call scheduler started successfully")
             logger.info("Scheduled jobs:")
-            logger.info("  - Test calls at 04:13")
+            logger.info("  - Test calls at 10:00")
             logger.info("  - Afternoon calls at 14:00")
             logger.info("  - Evening calls at 18:00")
                 
@@ -71,10 +71,19 @@ class CallScheduler:
                 current_hour = now.hour
                 current_minute = now.minute
                 
-                # Check if it's time to run (04:13 for testing)
-                if current_hour == 4 and current_minute == 18:
-                    logger.info(f"🕐 Scheduled time reached: {current_hour}:{current_minute:02d}")
-                    await self.process_today_calls()
+                # Check if it's a working day (Sunday-Thursday)
+                weekday = (now.weekday() + 1) % 7  # Convert to Sunday=0, Monday=1, ..., Thursday=4, Friday=5, Saturday=6
+                
+                # Only run on working days (Sunday-Thursday)
+                if weekday <= 4:  # Sunday=0, Monday=1, Tuesday=2, Wednesday=3, Thursday=4
+                    # Check if it's time to run (10:00, 14:00, or 18:00)
+                    if current_hour in [10, 14, 18] and current_minute == 0:
+                        logger.info(f"🕐 Scheduled time reached: {current_hour}:{current_minute:02d}")
+                        await self.process_today_calls()
+                else:
+                    # Log that we're skipping due to weekend
+                    if current_hour in [10, 14, 18] and current_minute == 0:
+                        logger.info(f"📅 Weekend detected ({now.strftime('%A')}) - skipping scheduled calls")
                 
                 # Wait for 1 minute before next check
                 await asyncio.wait_for(self.stop_event.wait(), timeout=60)

@@ -218,6 +218,59 @@ async def clickup_webhook(request: Request):
         print(f"Error processing webhook: {e}")
         raise HTTPException(status_code=400, detail="Invalid request data")
 
+@app.post('/leadconnector/manual_call')
+async def manual_call(request: Request):
+    try:
+        # Verify the request signature - DISABLED FOR NOW
+        # signature = request.headers.get('X-ClickUp-Signature')
+        # if signature:
+        #     if not verify_clickup_signature(request.get_data(), signature):
+        #         return jsonify({"status": "error", "message": "Invalid signature"}), 401
+        
+        data = await request.json()
+        print("Received ClickUp Webhook Data:")
+        # Print with Hebrew support - ensure_ascii=False preserves Hebrew characters
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        
+        # Also print with RTL marker for better Hebrew display
+        print("\n--- RTL Format ---")
+        rtl_json = json.dumps(data, indent=2, ensure_ascii=False)
+        # Add RTL marker at the beginning
+        print("\u202B" + rtl_json)
+
+        # Process the data based on the 'event' field
+        event = data.get('event')
+        
+
+        # Create LeadConnectorContact from the webhook data
+        contact_data = LeadConnectorContact(**data)
+        print(f"Contact data: {contact_data}")
+        
+        # Extract phone number from the LeadConnectorContact
+        phone_number = contact_data.phone
+        contact_id = contact_data.contact_id
+        
+        if phone_number and contact_id:
+            # Add phone to LiveKit trunk
+            if await add_phone_to_trunk(phone_number):
+                    # Make outbound call using the new LiveKit service
+                    if await create_agent_dispatch(contact_data):
+                        print(f"✅ Successfully created agent dispatch for {phone_number}")
+                    else:
+                        print("Failed to create agent dispatch")
+                        raise HTTPException(status_code=400, detail="Failed to create agent dispatch")
+            else:
+                print("Failed to add phone number to trunk")
+                raise HTTPException(status_code=400, detail="Failed to add phone number to trunk")
+        else:
+            print("No phone number found in LeadConnectorContact")
+            raise HTTPException(status_code=400, detail="No phone number found in LeadConnectorContact")
+
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error processing webhook: {e}")
+        raise HTTPException(status_code=400, detail="Invalid request data")
+
 def extract_phone_number_from_task(task_data: dict) -> str:
     """
     Extract phone number from ClickUp task data

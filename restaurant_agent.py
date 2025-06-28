@@ -145,8 +145,10 @@ class SupervisorAgent(Agent):
 class ChatAgent(Agent):
     """Realtime agent that greets the user and hands off when needed."""
 
-    def __init__(self, supervisor) -> None:
+    def __init__(self, supervisor, phone_number, contact_id) -> None:
         self.supervisor = supervisor
+        self.phone_number = phone_number
+        self.contact_id = contact_id
         super().__init__(
             instructions=(
                 """
@@ -176,7 +178,7 @@ class ChatAgent(Agent):
 
                 ## Function Tools
                 - endConversation()                  → סיום השיחה.
-                - to_eligibility()                  → מעביר לסוכן של תיאום פגישה.
+                - to_eligibility()                  → תיאום פגישה
 
                 ## Other details
                 - Avoid technical jargon; use plain language so that instructions are easy to understand.
@@ -191,21 +193,21 @@ class ChatAgent(Agent):
                 """
             ),
              tools=[],
-            llm=openai.realtime.RealtimeModel.with_azure(
-                azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
-                api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
-                api_version="2024-10-01-preview",
-                #  turn_detection=TurnDetection(
-                #     type="server_vad",
-                #     threshold=0.8,
-                #     prefix_padding_ms=300,
-                #     silence_duration_ms=500,
-                #     create_response=True,
-                #     interrupt_response=False,
-                # )
-                # voice="coral"
-            ),
+            # llm=openai.realtime.RealtimeModel.with_azure(
+            #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
+            #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
+            #     api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
+            #     api_version="2024-10-01-preview",
+            #     #  turn_detection=TurnDetection(
+            #     #     type="server_vad",
+            #     #     threshold=0.8,
+            #     #     prefix_padding_ms=300,
+            #     #     silence_duration_ms=500,
+            #     #     create_response=True,
+            #     #     interrupt_response=False,
+            #     # )
+            #     # voice="coral"
+            # ),
 
             # llm=openai.LLM.with_azure(
             #     azure_deployment=os.getenv("AZURE_OPENAI_GPT41_DEPLOYMENT"),
@@ -228,9 +230,9 @@ class ChatAgent(Agent):
     @function_tool()
     async def to_eligibility(self):
         """
-        מעביר לסוכן של תיאום פגישה.
+        בדיקת זכאות למימון לימודים.
         """
-        return EligibilityAgent(self.supervisor), "בסדר גמור. מיד נתחיל"
+        return EligibilityAgent(self.supervisor, self.phone_number, self.contact_id), "בסדר גמור. מיד נתחיל"
 
 # ---------------------------------------------------------------------------
 # Eligibility Agent – realtime, low‑latency front‑end
@@ -239,8 +241,10 @@ class ChatAgent(Agent):
 class EligibilityAgent(Agent):
     """Realtime agent that greets the user and hands off when needed."""
 
-    def __init__(self, supervisor) -> None:
+    def __init__(self, supervisor, phone_number, contact_id) -> None:
         self.supervisor = supervisor
+        self.phone_number = phone_number
+        self.contact_id = contact_id
         super().__init__(
             instructions=(
                 """
@@ -372,21 +376,21 @@ class EligibilityAgent(Agent):
                 """
             ),
              tools=[],
-            llm=openai.realtime.RealtimeModel.with_azure(
-                azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
-                api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
-                api_version="2024-10-01-preview",
-                #  turn_detection=TurnDetection(
-                #     type="server_vad",
-                #     threshold=0.8,
-                #     prefix_padding_ms=300,
-                #     silence_duration_ms=500,
-                #     create_response=True,
-                #     interrupt_response=False,
-                # )
-                # voice="coral"
-            ),
+            # llm=openai.realtime.RealtimeModel.with_azure(
+            #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
+            #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
+            #     api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
+            #     api_version="2024-10-01-preview",
+            #     #  turn_detection=TurnDetection(
+            #     #     type="server_vad",
+            #     #     threshold=0.8,
+            #     #     prefix_padding_ms=300,
+            #     #     silence_duration_ms=500,
+            #     #     create_response=True,
+            #     #     interrupt_response=False,
+            #     # )
+            #     # voice="coral"
+            # ),
 
             # llm=openai.LLM.with_azure(
             #     azure_deployment=os.getenv("AZURE_OPENAI_GPT41_DEPLOYMENT"),
@@ -419,7 +423,7 @@ class EligibilityAgent(Agent):
         מעביר לסוכן של תיאום פגישה.
         """
         await update_leadconnector_contact(self.contact_id, {"meeting_topic": "נמצא לא זכאי למגלה"})
-        return NotEligibleAgent(self.supervisor), "רגע אחד בבקשה."
+        return NotEligibleAgent(self.supervisor, self.phone_number, self.contact_id), "רגע אחד בבקשה."
 
     @function_tool()
     async def to_process_explanation(self):
@@ -427,7 +431,7 @@ class EligibilityAgent(Agent):
         מעביר לסוכן של הסבר התהליך.
         """
         await update_leadconnector_contact(self.contact_id, {"meeting_topic": "מימון לימודים"})
-        return ProcessExplanationAgent(self.supervisor), "רגע אחד בבקשה."
+        return ProcessExplanationAgent(self.supervisor, self.phone_number, self.contact_id  ), "רגע אחד בבקשה."
 
 # ---------------------------------------------------------------------------
 # NotEligible Agent – realtime, low‑latency front‑end
@@ -503,11 +507,11 @@ class NotEligibleAgent(Agent):
                 """
             ),
              tools=[],
-            llm=openai.realtime.RealtimeModel.with_azure(
-                azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
-                api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
-                api_version="2024-10-01-preview",
+            # llm=openai.realtime.RealtimeModel.with_azure(
+            #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
+            #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
+            #     api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
+            #     api_version="2024-10-01-preview",
                 #  turn_detection=TurnDetection(
                 #     type="server_vad",
                 #     threshold=0.8,
@@ -517,7 +521,7 @@ class NotEligibleAgent(Agent):
                 #     interrupt_response=False,
                 # )
                 # voice="coral"
-            ),
+            # ),
 
             # llm=openai.LLM.with_azure(
             #     azure_deployment=os.getenv("AZURE_OPENAI_GPT41_DEPLOYMENT"),
@@ -618,26 +622,34 @@ class ProcessExplanationAgent(Agent):
                     examples:
                     - "יש לך שאלות על התהליך?"
                     transitions:
-                    - next_step: 9_schedule_meeting
+                    - next_step: 11_schedule_meeting
                         condition: הלקוח מבין ומעוניין להמשיך
+                
+                - id: 11_schedule_meeting
+                    description: תיאום פגישה
+                    instructions:
+                    - "הפעל/י את `to_schedule_meeting()`"
+                    examples:
+                    - "מיד נתחיל בתיאום הפגישה"
+                    transitions:
                 """
             ),
              tools=[],
-            llm=openai.realtime.RealtimeModel.with_azure(
-                azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
-                api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
-                api_version="2024-10-01-preview",
-                #  turn_detection=TurnDetection(
-                #     type="server_vad",
-                #     threshold=0.8,
-                #     prefix_padding_ms=300,
-                #     silence_duration_ms=500,
-                #     create_response=True,
-                #     interrupt_response=False,
-                # )
-                # voice="coral"
-            ),
+            # llm=openai.realtime.RealtimeModel.with_azure(
+            #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
+            #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
+            #     api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
+            #     api_version="2024-10-01-preview",
+            #     #  turn_detection=TurnDetection(
+            #     #     type="server_vad",
+            #     #     threshold=0.8,
+            #     #     prefix_padding_ms=300,
+            #     #     silence_duration_ms=500,
+            #     #     create_response=True,
+            #     #     interrupt_response=False,
+            #     # )
+            #     # voice="coral"
+            # ),
 
             # llm=openai.LLM.with_azure(
             #     azure_deployment=os.getenv("AZURE_OPENAI_GPT41_DEPLOYMENT"),
@@ -661,8 +673,7 @@ class ProcessExplanationAgent(Agent):
         """
         מעביר לסוכן של תיאום פגישה.
         """
-        return ScheduleMeetingAgent(self.supervisor, self.phone_number, self.contact_id, True), "בסדר גמור. מיד נתחיל בתיאום הפגישה"
-
+        return ScheduleMeetingAgent(self.supervisor, self.phone_number, self.contact_id, True)
 # ---------------------------------------------------------------------------
 # ScheduleMeeting Agent – realtime, low‑latency front‑end
 # ---------------------------------------------------------------------------
@@ -832,11 +843,11 @@ class ScheduleMeetingAgent(Agent):
          
             ),
              tools=[],
-            llm=openai.realtime.RealtimeModel.with_azure(
-                azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
-                api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
-                api_version="2024-10-01-preview",
+            # llm=openai.realtime.RealtimeModel.with_azure(
+            #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_DEPLOYMENT"),
+            #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_REALTIME_ENDPOINT"),
+            #     api_key=os.getenv("AZURE_OPENAI_SWEDENCENTRAL_API_KEY"),
+            #     api_version="2024-10-01-preview",
                 #  turn_detection=TurnDetection(
                 #     type="server_vad",
                 #     threshold=0.8,
@@ -846,20 +857,20 @@ class ScheduleMeetingAgent(Agent):
                 #     interrupt_response=False,
                 # )
                 # voice="coral"
-            ),
+            # ),
 
             # llm=openai.realtime.RealtimeModel(
-                # model="gpt-4o-realtime-preview",
-                # model="gpt-4o-realtime-preview-2024-12-17",
-                # api_key=os.getenv("OPENAI_API_KEY"),
-                #  turn_detection=TurnDetection(
-                #     type="server_vad",
-                #     threshold=0.8,
-                #     silence_duration_ms=500,
-                #     create_response=True,
-                #     interrupt_response=False,
-                # )
-                # voice="coral"
+            #     # model="gpt-4o-realtime-preview",
+            #     model="gpt-4o-realtime-preview-2024-12-17",
+            #     api_key=os.getenv("OPENAI_API_KEY"),
+            #     #  turn_detection=TurnDetection(
+            #     #     type="server_vad",
+            #     #     threshold=0.8,
+            #     #     silence_duration_ms=500,
+            #     #     create_response=True,
+            #     #     interrupt_response=False,
+            #     # )
+            #     voice="coral"
             # ),
             # llm=google.beta.realtime.RealtimeModel(
             #     model="gemini-2.0-flash-live-001",
@@ -1094,7 +1105,6 @@ async def entrypoint(ctx: JobContext):
     """Start the Chat‑Supervisor session when the agent job launches."""
 
     supervisor = SupervisorAgent()
-    chat = ChatAgent(supervisor)
 
 
     # await ctx.connect()
@@ -1123,6 +1133,20 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         # OPENAI STT LLM TTS
+
+         llm=openai.realtime.RealtimeModel(
+                # model="gpt-4o-realtime-preview",
+                model="gpt-4o-realtime-preview-2024-12-17",
+                api_key=os.getenv("OPENAI_API_KEY"),
+                #  turn_detection=TurnDetection(
+                #     type="server_vad",
+                #     threshold=0.8,
+                #     silence_duration_ms=500,
+                #     create_response=True,
+                #     interrupt_response=False,
+                # )
+                voice="coral"
+            ),
         # stt=openai.STT.with_azure(
         #     azure_deployment=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_DEPLOYMENT"),
         #     azure_endpoint=os.getenv("AZURE_OPENAI_GPT4O_TRANSCRIBE_ENDPOINT"),
@@ -1164,12 +1188,13 @@ async def entrypoint(ctx: JobContext):
     sip_participant_identity = os.getenv("TWILIO_PHONE_NUMBER","+97233763938")
     
     agent = ScheduleMeetingAgent(supervisor, phone_number, contact_id)
+    chat = ChatAgent(supervisor, phone_number, contact_id)
 
     # start the session first before dialing, to ensure that when the user picks up
     # the agent does not miss anything the user says
     session_started = asyncio.create_task(session.start(
-        # agent=chat,
-        agent=agent,
+        agent=chat,
+        # agent=agent,
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVCTelephony(),
