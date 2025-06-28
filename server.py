@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request, HTTPException, Response
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from pyngrok import ngrok,conf
+from pyngrok.exception import PyngrokNgrokError
 import os
 import hmac
 import hashlib
@@ -14,8 +15,12 @@ import logging
 import pickle
 from twilio.rest import Client
 from twilio.http.async_http_client import AsyncTwilioHttpClient
-from agents.types import ConfirmationTracking, LeadConnectorContact
+from agents.types import ConfirmationTracking, LeadConnectorContact, PhoneStatus
+import pytz
+from contextlib import asynccontextmanager
 
+# Import utility functions
+from utils import is_within_working_hours
 
 # Import calendar functionality from the new module
 from calendar_service import (
@@ -42,10 +47,43 @@ from leadconnector_service import (
     leadconnector_service,
     update_leadconnector_contact,
     get_leadconnector_contact,
-    create_leadconnector_contact
+    create_leadconnector_contact,
+    update_next_call_time,
+    get_contacts_for_today_calls
 )
 
-app = FastAPI()
+# Import scheduler functionality
+from scheduler_service import start_scheduler, stop_scheduler, trigger_manual_call_processing
+
+# Global scheduler instance
+scheduler_started = False
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for FastAPI startup and shutdown"""
+    # Startup
+    global scheduler_started
+    if not scheduler_started:
+        try:
+            # Start the call scheduler
+            print("🕐 Starting call scheduler...")
+            start_scheduler()
+            print("✅ Call scheduler started successfully")
+            scheduler_started = True
+        except Exception as e:
+            print(f"❌ Failed to start scheduler: {e}")
+            print("⚠️ Server will continue without scheduler")
+    
+    yield
+    
+    # Shutdown
+    try:
+        stop_scheduler()
+        print("✅ Call scheduler stopped")
+    except Exception as e:
+        print(f"⚠️ Error stopping scheduler: {e}")
+
+app = FastAPI(lifespan=lifespan)
 # CORS(app)  # Disabled CORS for now
 
 # Configure logging
@@ -53,6 +91,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 load_dotenv()
 
+# Israel timezone
+ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # ---------------------------------------------------------------------------
 # TWILIO CLIENT
@@ -147,16 +187,25 @@ async def clickup_webhook(request: Request):
         
         # Extract phone number from the LeadConnectorContact
         phone_number = contact_data.phone
+        contact_id = contact_data.contact_id
         
-        if phone_number:
+        if phone_number and contact_id:
             # Add phone to LiveKit trunk
             if await add_phone_to_trunk(phone_number):
-                # Make outbound call using the new LiveKit service
-                if await create_agent_dispatch(contact_data):
-                    print(f"✅ Successfully created agent dispatch for {phone_number}")
+                # Check if within working hours before creating agent dispatch
+                if is_within_working_hours():
+                    # Make outbound call using the new LiveKit service
+                    if await create_agent_dispatch(contact_data):
+                        print(f"✅ Successfully created agent dispatch for {phone_number}")
+                    else:
+                        print("Failed to create agent dispatch")
+                        raise HTTPException(status_code=400, detail="Failed to create agent dispatch")
                 else:
-                    print("Failed to create agent dispatch")
-                    raise HTTPException(status_code=400, detail="Failed to create agent dispatch")
+                    print(f"⏰ Outside working hours - agent dispatch skipped for {phone_number}")
+                    await update_next_call_time(contact_id)
+                    await update_leadconnector_contact(contact_id, {"phone_status": PhoneStatus.NEW_LEAD.value})
+                    # Return success but log that dispatch was skipped
+                    return {"status": "success", "message": "Agent dispatch skipped - outside working hours"}
             else:
                 print("Failed to add phone number to trunk")
                 raise HTTPException(status_code=400, detail="Failed to add phone number to trunk")
@@ -257,8 +306,63 @@ async def livekit_add_phone(request: Request):
     else:
         return {"status": "error"}
 
+@app.post('/scheduler/trigger-calls')
+async def trigger_scheduled_calls():
+    """Manually trigger the scheduled call processing"""
+    try:
+        await trigger_manual_call_processing()
+        return {"status": "success", "message": "Call processing triggered successfully"}
+    except Exception as e:
+        logger.error(f"Error triggering call processing: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger call processing: {str(e)}")
 
+@app.get('/scheduler/status')
+async def get_scheduler_status():
+    """Get the current status of the scheduler"""
+    from scheduler_service import call_scheduler
+    now = datetime.now(ISRAEL_TZ)
+    
+    return {
+        "status": "running" if call_scheduler.is_running else "stopped",
+        "current_time": now.isoformat(),
+        "jobs": [
+            {
+                "id": "morning_calls",
+                "name": "Morning calls at 10:00",
+                "next_run": f"{now.date()}T04:13:00+03:00" if now.hour < 10 else f"{(now + timedelta(days=1)).date()}T10:00:00+03:00"
+            },
+            {
+                "id": "afternoon_calls", 
+                "name": "Afternoon calls at 14:00",
+                "next_run": f"{now.date()}T14:00:00+03:00" if now.hour < 14 else f"{(now + timedelta(days=1)).date()}T14:00:00+03:00"
+            },
+            {
+                "id": "evening_calls",
+                "name": "Evening calls at 18:00", 
+                "next_run": f"{now.date()}T18:00:00+03:00" if now.hour < 18 else f"{(now + timedelta(days=1)).date()}T18:00:00+03:00"
+            }
+        ]
+    }
 
+@app.post('/scheduler/start')
+async def start_scheduler_endpoint():
+    """Start the scheduler"""
+    try:
+        start_scheduler()
+        return {"status": "success", "message": "Scheduler started successfully"}
+    except Exception as e:
+        logger.error(f"Error starting scheduler: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start scheduler: {str(e)}")
+
+@app.post('/scheduler/stop')
+async def stop_scheduler_endpoint():
+    """Stop the scheduler"""
+    try:
+        stop_scheduler()
+        return {"status": "success", "message": "Scheduler stopped successfully"}
+    except Exception as e:
+        logger.error(f"Error stopping scheduler: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to stop scheduler: {str(e)}")
 
 async def send_whatsapp_confirmation(phone_number: str, date: str, time: str):
     """
@@ -270,8 +374,8 @@ async def send_whatsapp_confirmation(phone_number: str, date: str, time: str):
     
     whatsapp_number = f"whatsapp:{phone_number}"
     message = await twilio_client.messages.create_async(
-        from_='whatsapp:+14155238886',
-        content_sid='HXb5b62575e6e4ff6129ad7c8efe1f983e',
+        from_='whatsapp:+97233763938',
+        content_sid='HX582776fc767a4635abebe81969d15ca6',
         content_variables='{"1":"'+date+'","2":"'+time+'"}',
         to=whatsapp_number
     )
@@ -287,9 +391,10 @@ async def send_whatsapp_meeting_link(phone_number: str, meeting_link: str):
     
     whatsapp_number = f"whatsapp:{phone_number}"
     message = await twilio_client.messages.create_async(
-        from_='whatsapp:+14155238886',
-        content_sid='HXb5b62575e6e4ff6129ad7c8efe1f983e',
-        content_variables='{"1":"'+meeting_link+'","2":""}',
+        from_='whatsapp:+97233763938',
+        # content_sid='HX582776fc767a4635abebe81969d15ca6', #DEMO
+        content_sid='HXcc8209b59801f087738f4cb809913ada', #DEMO
+        content_variables='{"1":"'+meeting_link+'"}',
         to=whatsapp_number
     )
     return message
@@ -363,7 +468,7 @@ async def send_confirmation(request: Request):
         
         # Set confirmation tracking
         try:
-            await set_confirmation_tracking(phone_number, date, time, "pending", datetime.now().isoformat(), None)
+            await set_confirmation_tracking(phone_number, date, time, "pending", datetime.now(ISRAEL_TZ).isoformat(), None)
             print(f"✅ Confirmation tracking set for {phone_number}")
         except Exception as e:
             logger.error(f"Failed to set confirmation tracking: {e}")
@@ -430,7 +535,7 @@ async def whatsapp_webhook(request: Request):
                 
                 await send_whatsapp_meeting_link(phone_number, meet_link)
 
-                await set_confirmation_tracking(phone_number, status="approved", answered_at=datetime.now().isoformat())
+                await set_confirmation_tracking(phone_number, status="approved", answered_at=datetime.now(ISRAEL_TZ).isoformat())
                 # Update confirmation tracking status
                 print(f"📱 Confirmation tracking: {confirmation_tracking}")
 
@@ -443,7 +548,7 @@ async def whatsapp_webhook(request: Request):
         elif button_payload == "cancellation1234":
             # Handle rejection flow
             print("❌ Decline meeting button clicked")
-            await set_confirmation_tracking(phone_number, status="declined", answered_at=datetime.now().isoformat())
+            await set_confirmation_tracking(phone_number, status="declined", answered_at=datetime.now(ISRAEL_TZ).isoformat())
             
     else:
         print("💬 Text reply or no button detected:", Body)
@@ -452,16 +557,64 @@ async def whatsapp_webhook(request: Request):
 
 if __name__ == '__main__':
     import uvicorn
+    import asyncio
+    
     # Set up ngrok to expose the local server
     port = 5000
     
     # Start ngrok tunnel with static domain
     conf.get_default().ngrok_path = "C:\\ProgramData\\chocolatey\\bin\\ngrok.exe"  # Use system-installed binary
 
-    public_url = ngrok.connect(port, domain=STATIC_NGROK_DOMAIN)
-    print(f"Ngrok tunnel established at: {public_url}")
-    print(f"Your webhook URL is: {public_url}/clickup-webhook")
-    print(f"Health check URL: {public_url}/health")
+    try:
+        public_url = ngrok.connect(port, domain=STATIC_NGROK_DOMAIN)
+        print(f"Ngrok tunnel established at: {public_url}")
+        print(f"Your webhook URL is: {public_url}/clickup-webhook")
+        print(f"Health check URL: {public_url}/health")
+    except PyngrokNgrokError as e:
+        if "limited to 1 simultaneous ngrok agent sessions" in str(e):
+            print("⚠️ Warning: Another ngrok session is already running")
+            print("💡 You can either:")
+            print("   1. Stop the other ngrok session and restart")
+            print("   2. Use the existing tunnel URL")
+            print("   3. Run without ngrok (server will be local only)")
+            
+            # Try to get existing tunnels
+            try:
+                tunnels = ngrok.get_ngrok_process().api.get_tunnels()
+                if tunnels:
+                    existing_url = tunnels[0].public_url
+                    print(f"📡 Existing tunnel found: {existing_url}")
+                    print(f"Your webhook URL is: {existing_url}/clickup-webhook")
+                    print(f"Health check URL: {existing_url}/health")
+                else:
+                    print("❌ No existing tunnels found")
+            except Exception:
+                print("❌ Could not retrieve existing tunnels")
+            
+            print("🚀 Starting server without new ngrok tunnel...")
+        else:
+            print(f"❌ Ngrok error: {e}")
+            print("🚀 Starting server without ngrok tunnel...")
+    except Exception as e:
+        print(f"❌ Unexpected error with ngrok: {e}")
+        print("🚀 Starting server without ngrok tunnel...")
     
-    # Run the FastAPI app with uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    try:
+        # Run the FastAPI app with uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down server...")
+        try:
+            stop_scheduler()
+            print("✅ Call scheduler stopped")
+        except Exception as e:
+            print(f"⚠️ Error stopping scheduler: {e}")
+        print("👋 Server shutdown complete")
+    except Exception as e:
+        print(f"❌ Server error: {e}")
+        try:
+            stop_scheduler()
+            print("✅ Call scheduler stopped")
+        except Exception as scheduler_error:
+            print(f"⚠️ Error stopping scheduler: {scheduler_error}")
+        raise

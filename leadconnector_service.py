@@ -4,7 +4,9 @@ import logging
 import aiohttp
 from typing import Dict, Optional, Any
 from dotenv import load_dotenv
-from agents.types import LeadConnectorContact
+from agents.types import LeadConnectorContact, PhoneStatus
+from datetime import datetime, timedelta
+import pytz
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -14,6 +16,9 @@ load_dotenv()
 LEADCONNECTOR_API_KEY = os.getenv('LEADCONNECTOR_API_KEY')
 LEADCONNECTOR_LOCATION_ID = os.getenv('LEADCONNECTOR_LOCATION_ID')
 LEADCONNECTOR_BASE_URL = "https://rest.gohighlevel.com/v1"
+
+# Israel timezone
+ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
 
 class LeadConnectorService:
@@ -233,6 +238,17 @@ class LeadConnectorService:
                 "value": contact['transcript']
             })
         
+        if hasattr(contact, 'meeting_topic') and contact.meeting_topic:
+            custom_fields.append({
+                "key": "meeting_topic",
+                "value": contact.meeting_topic
+            })
+        elif isinstance(contact, dict) and contact.get('meeting_topic'):
+            custom_fields.append({
+                "key": "meeting_topic",
+                "value": contact['meeting_topic']
+            })
+
         # Add custom fields if any exist
         if custom_fields:
             api_data["customField"] = custom_fields
@@ -495,6 +511,294 @@ async def append_to_transcript(contact_id: str, new_text: str) -> Dict[str, Any]
             "success": False,
             "error": str(e),
             "contact_id": contact_id
-        } 
+        }
+
+async def get_and_update_phone_status(contact_id: str) -> Dict[str, Any]:
+    """
+    Get the phone status from a contact and update it to ERROR if it's empty
+    
+    Args:
+        contact_id: The contact ID to check and update
+        
+    Returns:
+        Dict containing the result of the operation
+    """
+    if not contact_id:
+        return {
+            "success": False,
+            "error": "Contact ID is required"
+        }
+    
+    try:
+        # Get the full contact data
+        contact_result = await get_leadconnector_contact(contact_id)
+        
+        if not contact_result.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to retrieve contact: {contact_result.get('error', 'Unknown error')}",
+                "contact_id": contact_id
+            }
+        
+        contact_data = contact_result.get("data", {})
+        custom_fields = contact_data.get("customField", [])
+        
+        # Find the phone status field
+        phone_status_field = None
+        for field in custom_fields:
+            if field.get("id") == "NXOau172nSZOePU6Yqj6":
+                phone_status_field = field
+                break
+        
+        current_phone_status = phone_status_field.get("value", "") if phone_status_field else ""
+        
+        # Check if phone status is empty or None
+        if not current_phone_status or current_phone_status.strip() == "":
+            # Update phone status to ERROR
+            from agents.types import PhoneStatus
+
+            
+            update_result = await update_leadconnector_contact(contact_id, {"phone_status": PhoneStatus.ERROR.value})
+            
+            if update_result.get("success"):
+                logger.info(f"Successfully updated phone status to ERROR for contact {contact_id}")
+                return {
+                    "success": True,
+                    "previous_status": current_phone_status,
+                    "new_status": PhoneStatus.ERROR.value,
+                    "contact_id": contact_id,
+                    "was_updated": True
+                }
+            else:
+                logger.error(f"Failed to update phone status for contact {contact_id}: {update_result.get('error')}")
+                return {
+                    "success": False,
+                    "error": f"Failed to update contact: {update_result.get('error', 'Unknown error')}",
+                    "contact_id": contact_id,
+                    "current_status": current_phone_status
+                }
+        else:
+            logger.info(f"Phone status for contact {contact_id} is not empty: {current_phone_status}")
+            return {
+                "success": True,
+                "current_status": current_phone_status,
+                "contact_id": contact_id,
+                "was_updated": False
+            }
+            
+    except Exception as e:
+        logger.error(f"Error getting and updating phone status for contact {contact_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "contact_id": contact_id
+        }
+
+async def update_next_call_time(contact_id: str) -> Dict[str, Any]:
+    """
+    Update the contact's next call time to the next working day at 10:00.
+    
+    Working days: Sunday-Thursday
+    If today is a working day and before 18:00, set to today 10:00
+    If today is a working day and after 18:00, set to next working day 10:00
+    If today is Friday or Saturday, set to next Sunday 10:00
+    
+    Args:
+        contact_id: The contact ID to update
+        
+    Returns:
+        Dict containing the result of the operation
+    """
+    if not contact_id:
+        return {
+            "success": False,
+            "error": "Contact ID is required"
+        }
+    
+    try:
+        # Get current time in Israel timezone
+        now = datetime.now(ISRAEL_TZ)
+        current_hour = now.hour
+        
+        # Convert to Sunday=0, Monday=1, ..., Thursday=4, Friday=5, Saturday=6
+        weekday = (now.weekday() + 1) % 7
+        
+        # Determine next call time based on current day and time
+        if weekday < 5:  # Sunday-Thursday (working day)
+            if current_hour < 18:  # Before 18:00
+                # Set to today 10:00
+                next_call_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
+            else:  # After 18:00
+                # Set to next working day 10:00
+                next_call_time = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+                # Check if next day is weekend and adjust if needed
+                next_weekday = (next_call_time.weekday() + 1) % 7
+                if next_weekday >= 5:  # Friday or Saturday
+                    days_to_add = 7 - next_weekday  # Move to next Sunday
+                    next_call_time = next_call_time + timedelta(days=days_to_add)
+        else:  # Friday or Saturday (weekend)
+            # Set to next Sunday 10:00
+            days_to_add = 7 - weekday  # Move to next Sunday
+            next_call_time = (now + timedelta(days=days_to_add)).replace(hour=10, minute=0, second=0, microsecond=0)
+        
+        # Format the date for LeadConnector (ISO format)
+        next_call_time_str = next_call_time.date().isoformat()
+
+        
+        # Update the contact
+        update_result = await update_leadconnector_contact(contact_id, {"next_call_time": next_call_time_str})
+        
+        if update_result.get("success"):
+            logger.info(f"Successfully updated next call time for contact {contact_id} to {next_call_time_str}")
+            return {
+                "success": True,
+                "next_call_time": next_call_time_str,
+                "formatted_time": next_call_time.strftime("%Y-%m-%d %H:%M"),
+                "day_of_week": next_call_time.strftime("%A"),
+                "contact_id": contact_id
+            }
+        else:
+            logger.error(f"Failed to update next call time for contact {contact_id}: {update_result.get('error')}")
+            return {
+                "success": False,
+                "error": f"Failed to update contact: {update_result.get('error', 'Unknown error')}",
+                "contact_id": contact_id
+            }
+            
+    except Exception as e:
+        logger.error(f"Error updating next call time for contact {contact_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "contact_id": contact_id
+        }
+
+async def get_contacts_for_today_calls() -> Dict[str, Any]:
+    """
+    Get all contacts with next_call_time set to today and phone_status of 
+    "Not available to talk" or "Not Answered"
+    
+    Returns:
+        Dict containing the list of contacts that need to be called today
+    """
+    if not LEADCONNECTOR_API_KEY:
+        return {
+            "success": False,
+            "error": "LEADCONNECTOR_API_KEY not configured"
+        }
+    
+    if not LEADCONNECTOR_LOCATION_ID:
+        return {
+            "success": False,
+            "error": "LEADCONNECTOR_LOCATION_ID not configured"
+        }
+    
+    try:
+        # Get current date in Israel timezone for comparison
+        today = datetime.now(ISRAEL_TZ).date()
+        today_str = today.strftime("%Y-%m-%d")
+        
+        # Get first 100 contacts from the location
+        url = f"{LEADCONNECTOR_BASE_URL}/contacts/"
+        params = {
+            "locationId": LEADCONNECTOR_LOCATION_ID,
+            "limit": 100  # Get only first 100 contacts
+        }
+        
+        contacts_to_call = []
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                headers=leadconnector_service._get_headers(),
+                params=params
+            ) as response:
+                
+                if response.status == 200:
+                    result = await response.json()
+                    contacts = result.get("contacts", [])
+                    
+                    logger.info(f"Retrieved {len(contacts)} contacts from LeadConnector")
+                    
+                    # Process contacts to find those for today's calls
+                    for contact in contacts:
+                        contact_id = contact.get("id")
+                        custom_fields = contact.get("customField", [])
+                        
+                        # Extract next_call_time and phone_status from custom fields
+                        next_call_time = None
+                        phone_status = None
+                        
+                        for field in custom_fields:
+                            if field.get("id") == "UPfEjxeXxSh98wlx5oV8":
+                                next_call_time = field.get("value")
+                            elif field.get("id") == "NXOau172nSZOePU6Yqj6":
+                                phone_status = field.get("value")
+                        # Check if contact meets criteria
+                        if next_call_time and phone_status:
+                            try:
+                                # Parse the next_call_time - handle different formats
+                                if isinstance(next_call_time, int):
+                                    # Unix timestamp in milliseconds
+                                    call_time = datetime.fromtimestamp(next_call_time / 1000, tz=ISRAEL_TZ)
+                                elif isinstance(next_call_time, str):
+                                    # String format - try ISO format first
+                                    if 'T' in next_call_time or 'Z' in next_call_time:
+                                        call_time = datetime.fromisoformat(next_call_time.replace('Z', '+00:00'))
+                                        # Convert to Israel timezone for comparison
+                                        call_time = call_time.astimezone(ISRAEL_TZ)
+                                    else:
+                                        # Try date format like "2025-06-28"
+                                        call_time = datetime.strptime(next_call_time, "%Y-%m-%d")
+                                        call_time = ISRAEL_TZ.localize(call_time)
+                                else:
+                                    logger.warning(f"Unexpected next_call_time format for contact {contact_id}: {type(next_call_time)}")
+                                    continue
+                                
+                                call_date = call_time.date()
+                                
+                                # Check if next_call_time is today
+                                if call_date == today and phone_status in [PhoneStatus.NOT_AVAILABLE_TO_TALK.value, PhoneStatus.NOT_ANSWERED.value, PhoneStatus.NEW_LEAD.value]:
+                                        contact_info = {
+                                            "contact_id": contact_id,
+                                            "first_name": contact.get("firstName", ""),
+                                            "last_name": contact.get("lastName", ""),
+                                            "phone": contact.get("phone", ""),
+                                            "email": contact.get("email", ""),
+                                            "next_call_time": next_call_time,
+                                            "phone_status": phone_status,
+                                            "call_time_formatted": call_time.strftime("%Y-%m-%d %H:%M")
+                                        }
+                                        contacts_to_call.append(contact_info)
+                                        logger.info(f"Found contact {contact_id} for today's call: {contact_info['first_name']} {contact_info['last_name']} - {phone_status}")
+                                        
+                            except Exception as e:
+                                logger.warning(f"Error parsing next_call_time for contact {contact_id}: {e}")
+                                continue
+                    
+                    logger.info(f"Found {len(contacts_to_call)} contacts to call today")
+                    return {
+                        "success": True,
+                        "contacts": contacts_to_call,
+                        "count": len(contacts_to_call),
+                        "date": today_str,
+                        "total_contacts_processed": len(contacts)
+                    }
+                    
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to get contacts: {response.status} - {error_text}")
+                    return {
+                        "success": False,
+                        "error": f"API request failed with status {response.status}",
+                        "details": error_text
+                    }
+                    
+    except Exception as e:
+        logger.error(f"Error getting contacts for today's calls: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
     
     

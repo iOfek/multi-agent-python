@@ -39,7 +39,7 @@ from agents.utils import load_prompt
 from twilio.rest import Client
 
 from calendar_service import CalendarService
-from leadconnector_service import append_to_transcript, update_leadconnector_contact
+from leadconnector_service import append_to_transcript, get_and_update_phone_status, update_leadconnector_contact
 
 # ---------------------------------------------------------------------------
 # ENV & GLOBALS
@@ -222,6 +222,8 @@ class ChatAgent(Agent):
         סיום השיחה.
         """
         await end_call(context)
+        await update_leadconnector_contact(self.contact_id, {"phone_status": PhoneStatus.NOT_AVAILABLE_TO_TALK})
+
 
     @function_tool()
     async def to_eligibility(self):
@@ -356,39 +358,16 @@ class EligibilityAgent(Agent):
                 - id: 10_explain_process
                     description: העברה לסוכן הסבר התהליך.
                     instructions:
-                    - "אני מעביר אותך עכשיו למומחה שלנו שיסביר לך את התהליך המלא."
+                    - "אין בעיה נסביר לך את התהליך המלא"
                     - "תקרא ל to_process_explanation()"
                     examples:
-                    - "רגע אחד בבקשה, אני מעביר אותך למומחה."
-                    transitions: []
+                    transitions: 
 
                 - id: 9_schedule_meeting
                     description: קביעת פגישת ייעוץ עם עורך הדין גל זינגר.
                     instructions:
-                    - "שאל/י: \"מה מועד נוח לך בבוקר, צהריים או ערב?\""
-                    - "קבל/י העדפה → listLawyerSlots(preference) והצג/י 2-3 אפשרויות."
-                    - "לאחר בחירת הלקוח → bookLawyerSlot(time_slot)."
-                    - "מצוין, קבעתי ל-__ בתאריך __ בשעה __. תקבל/י קישור לזום ותזכורת."
+                    - "תקרא ל to_schedule_meeting()"
                     examples:
-                    - "האם יום שלישי בבוקר מתאים?"
-                    transitions:
-                    - next_step: 13_closing
-                        condition: הפגישה נקבעה ואושרה
-
-                - id: 13_closing
-                    description: סיום אדיב ומקצועי.
-                    instructions:
-                    - "תודה רבה על זמנך, מחכים לראותך בפגישה. יום נעים והמשך בריאות!"
-                    examples:
-                    - "יום נפלא!"
-                    transitions: []
-
-                - id: 14_closing_callback
-                    description: סיום לאחר תיאום שיחה חוזרת.
-                    instructions:
-                    - "תודה, נחזור אליך במועד שתיאמנו. יום טוב!"
-                    examples:
-                    - "להתראות ובהצלחה!"
                     transitions: []
                 """
             ),
@@ -426,19 +405,29 @@ class EligibilityAgent(Agent):
         """
         await self.session.generate_reply()
     
+
+    @function_tool()
+    async def to_schedule_meeting(self):
+        """
+        מעביר לסוכן של תיאום פגישה.
+        """
+        return ScheduleMeetingAgent(self.supervisor, self.phone_number, self.contact_id, True), "בסדר גמור. מיד נתחיל בתיאום הפגישה"
+  
     @function_tool()
     async def to_not_eligible(self):
         """
         מעביר לסוכן של תיאום פגישה.
         """
-        return NotEligibleAgent(self.supervisor), "אני מעביר אותך עכשיו למומחה שלנו שיעזור לעומק. רגע אחד בבקשה."
+        await update_leadconnector_contact(self.contact_id, {"meeting_topic": "נמצא לא זכאי למגלה"})
+        return NotEligibleAgent(self.supervisor), "רגע אחד בבקשה."
 
     @function_tool()
     async def to_process_explanation(self):
         """
         מעביר לסוכן של הסבר התהליך.
         """
-        return ProcessExplanationAgent(self.supervisor), "אני מעביר אותך עכשיו למומחה שלנו שיסביר לך את התהליך המלא. רגע אחד בבקשה."
+        await update_leadconnector_contact(self.contact_id, {"meeting_topic": "מימון לימודים"})
+        return ProcessExplanationAgent(self.supervisor), "רגע אחד בבקשה."
 
 # ---------------------------------------------------------------------------
 # NotEligible Agent – realtime, low‑latency front‑end
@@ -447,8 +436,10 @@ class EligibilityAgent(Agent):
 class NotEligibleAgent(Agent):
     """Realtime agent that greets the user and hands off when needed."""
 
-    def __init__(self, supervisor) -> None:
+    def __init__(self, supervisor, phone_number: str = None, contact_id: str = None) -> None:
         self.supervisor = supervisor
+        self.phone_number = phone_number
+        self.contact_id = contact_id
         super().__init__(
             instructions=(
                 """
@@ -503,10 +494,10 @@ class NotEligibleAgent(Agent):
                 - id: 5_not_eligible
                     description: הלקוח אינו זכאי למלגה – הצעת שירותים אחרים.
                     instructions:
-                    - "updateCRM(\"לקוח אינו זכאי למלגת מימון לימודים\")"
                     - "אמור/י: \"נראה שאתה לא מתאים למלגה. אם תרצה לבדוק זכויות בעקבות תאונת עבודה או נושאים משפטיים אחרים, ניתן לקבוע פגישה עם עורך-דין ממשרדנו. תרצה לקבוע פגישה?\""
                     - "אם הלקוח משיב 'לא' אז תקרא ל endConversation()"
-                    - "אם הלקוח משיב 'כן' אז תקרא ל to_schedule_meeting(isEligible=False)"
+                    - "אם הלקוח משיב 'כן' תשאל אותו באיזה נושא משפטי מעוניין לדבר"
+                    - "לאחר שענה על השאלה תקרא ל to_schedule_meeting(topic)"
                     examples:
                     - "האם תרצה לתאם פגישת ייעוץ בנושאים משפטיים אחרים?"
                 """
@@ -546,13 +537,20 @@ class NotEligibleAgent(Agent):
         await self.session.generate_reply()
 
     @function_tool()
-    async def updateCRM(self, value: str):
+    async def endConversation(self, context: RunContext):
         """
-        מעדכן שדה ב-CRM.
+        סיום השיחה.
         """
-        print(f"updateCRM: {value} started")
-        await asyncio.sleep(5)
-        print(f"updateCRM: {value} done")
+        await end_call(context)
+        await update_leadconnector_contact(self.contact_id, {"phone_status": PhoneStatus.NOT_ELIGIBLE_NO_APPOINTMENT})
+
+    @function_tool()
+    async def to_schedule_meeting(self, topic: str):
+        """
+        מעביר לסוכן של תיאום פגישה.
+        """
+        await update_leadconnector_contact(self.contact_id, {"meeting_topic": topic})
+        return ScheduleMeetingAgent(self.supervisor, self.phone_number, self.contact_id, False)
 
 # ---------------------------------------------------------------------------
 # ProcessExplanation Agent – realtime, low‑latency front‑end
@@ -561,8 +559,10 @@ class NotEligibleAgent(Agent):
 class ProcessExplanationAgent(Agent):
     """Realtime agent that explains the legal process to eligible clients."""
 
-    def __init__(self, supervisor) -> None:
+    def __init__(self, supervisor, phone_number: str = None, contact_id: str = None) -> None:
         self.supervisor = supervisor
+        self.phone_number = phone_number
+        self.contact_id = contact_id
         super().__init__(
             instructions=(
                 """
@@ -661,7 +661,7 @@ class ProcessExplanationAgent(Agent):
         """
         מעביר לסוכן של תיאום פגישה.
         """
-        return ScheduleMeetingAgent(self.supervisor), "בסדר גמור. מיד נתחיל בתיאום הפגישה"
+        return ScheduleMeetingAgent(self.supervisor, self.phone_number, self.contact_id, True), "בסדר גמור. מיד נתחיל בתיאום הפגישה"
 
 # ---------------------------------------------------------------------------
 # ScheduleMeeting Agent – realtime, low‑latency front‑end
@@ -671,10 +671,11 @@ class ScheduleMeetingAgent(Agent):
     isEligible = True  # If you want this as a class variable
     """Realtime agent that schedules meetings with the lawyer."""
 
-    def __init__(self, supervisor, phone_number: str = None, contact_id: str = None) -> None:
+    def __init__(self, supervisor, phone_number: str = None, contact_id: str = None, eligible: bool = True) -> None:
         self.supervisor = supervisor
         self.phone_number = phone_number
         self.contact_id = contact_id
+        self.eligible = eligible
         self.calendar_service = CalendarService()
         super().__init__(
             instructions=(
@@ -882,8 +883,7 @@ class ScheduleMeetingAgent(Agent):
         """
         פתיחת השיחה.
         """
-        # await self.session.generate_reply()
-        pass
+        await self.session.generate_reply()
 
     @function_tool()
     async def endConversation(self, context: RunContext):
@@ -979,6 +979,10 @@ class ScheduleMeetingAgent(Agent):
                             data = await response.json()
                             status = data.get("confirmation_status")
                             if status == "approved":
+                                if self.eligible:
+                                    await update_leadconnector_contact(self.contact_id, {"phone_status": PhoneStatus.ELIGIBLE_SET_APPOINTMENT})
+                                else:
+                                    await update_leadconnector_contact(self.contact_id, {"phone_status": PhoneStatus.NOT_ELIGIBLE_SET_APPOINTMENT})
                                 print(f"✅ WhatsApp confirmation approved for {phone_number}")
                                 return "ההזמנה אושרה"
                             elif status == "declined":
@@ -1077,10 +1081,14 @@ async def entrypoint(ctx: JobContext):
         with open(readable_filename, 'w', encoding='utf-8') as f:
             f.write(readable_transcript)
         
-        await append_to_transcript(contact_id, S)
+        await append_to_transcript(contact_id, readable_transcript)
         print(f"Transcript for {ctx.room.name} saved to {json_filename} and {readable_filename}")
 
+    async def update_phone_status():
+        await get_and_update_phone_status(contact_id)
+
     ctx.add_shutdown_callback(write_transcript)
+    ctx.add_shutdown_callback(update_phone_status)
 
 
     """Start the Chat‑Supervisor session when the agent job launches."""
@@ -1153,7 +1161,7 @@ async def entrypoint(ctx: JobContext):
         phone_number = None
         contact_id = None
     # The participant's identity can be anything you want, but this example uses the phone number itself
-    sip_participant_identity = "+97233763938"
+    sip_participant_identity = os.getenv("TWILIO_PHONE_NUMBER","+97233763938")
     
     agent = ScheduleMeetingAgent(supervisor, phone_number, contact_id)
 
@@ -1212,7 +1220,7 @@ async def entrypoint(ctx: JobContext):
     await session_started
 
     # await session.generate_reply(instructions="שלום! איך אפשר לעזור?")
-    # await session.generate_reply()
+    await session.generate_reply()
 
 
     # await lkapi.aclose()

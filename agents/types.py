@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Optional, List
 import yaml
@@ -64,6 +65,7 @@ class PhoneStatus(Enum):
     NOT_ELIGIBLE_NO_APPOINTMENT = "Not Eligible no appointment"
     ELIGIBLE_NO_APPOINTMENT = "Eligible no appointment"
     ELIGIBLE_SET_APPOINTMENT = "Eligible set appointment"
+    NEW_LEAD = "New lead"
 
 @dataclass
 class LeadConnectorContact:
@@ -89,9 +91,10 @@ class LeadConnectorContact:
     disability_percentage: Optional[str] = None  # "האם נקבעו אחוזי נכות"
     
     # Call management fields
-    next_call_time: Optional[str] = None  # "Next Call Time"
+    next_call_time: Optional[datetime] = None  # "Next Call Time" format: 2020-10-29T09:31:30.255Z
     phone_status: Optional[PhoneStatus] = None  # "Phone Status"
     transcript: Optional[str] = None  # "Transcript"
+    meeting_topic: Optional[str] = None  # "Meeting Topic"
     
     def __init__(self, **kwargs):
         """Initialize the dataclass, ignoring any fields not defined in the class"""
